@@ -54,6 +54,15 @@ final class CatalogSync {
         return false
     }
 
+    /// Whether magnatune.com reports a newer release CRC than the installed catalog.
+    /// Always hits the network (not throttled). Returns false if we can't tell yet
+    /// (no stored CRC, or the check failed) to avoid a spurious "update available".
+    func updateAvailable() async -> Bool {
+        guard let stored = UserDefaults.standard.string(forKey: crcKey),
+              let crc = await fetchCRC() else { return false }
+        return crc != stored
+    }
+
     private func fetchCRC() async -> String? {
         do {
             let (data, _) = try await URLSession.shared.data(from: Self.changedURL)

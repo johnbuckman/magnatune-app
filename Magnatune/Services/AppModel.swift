@@ -15,6 +15,8 @@ final class AppModel: ObservableObject {
 
     @Published var catalogReady = false
     @Published var isRefreshing = false
+    /// True when magnatune.com reports a newer catalog CRC than the one we installed.
+    @Published var catalogUpdateAvailable = false
 
     // MARK: Connectivity + offline state
     /// Whether the device currently has a usable network path. When false the UI
@@ -31,7 +33,7 @@ final class AppModel: ObservableObject {
 
     /// Whether favorites are auto-downloaded for offline listening.
     static let autoDownloadKey = "autodownload.favorites"
-    @Published var autoDownloadFavorites: Bool = UserDefaults.standard.object(forKey: "autodownload.favorites") as? Bool ?? false
+    @Published var autoDownloadFavorites: Bool = UserDefaults.standard.object(forKey: "autodownload.favorites") as? Bool ?? true
 
     private let pathMonitor = NWPathMonitor()
     private var favoritesObserver: AnyCancellable?
@@ -67,6 +69,12 @@ final class AppModel: ObservableObject {
         let changed = await sync.refreshIfNeeded(force: force)
         if changed { openCatalog() }
         isRefreshing = false
+        await checkCatalogUpdate()
+    }
+
+    /// Refresh the "update available" flag by comparing the remote CRC to the installed one.
+    func checkCatalogUpdate() async {
+        catalogUpdateAvailable = await sync.updateAvailable()
     }
 
     // MARK: Connectivity

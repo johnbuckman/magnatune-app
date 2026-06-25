@@ -88,11 +88,12 @@ struct SearchView: View {
 struct FavoritesView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var user: UserStore
+    @Environment(\.isPhoneLayout) private var isPhone
     @State private var songs: [PlayableTrack] = []
     @State private var albums: [Album] = []
     @State private var artists: [Artist] = []
     @State private var names: [Int64: String] = [:]
-    private let cols = [GridItem(.adaptive(minimum: 150), spacing: 16)]
+    private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
 
     var body: some View {
         let vArtists = model.visibleArtists(artists)
@@ -114,6 +115,7 @@ struct FavoritesView: View {
                                 NavigationLink(value: a) {
                                     HStack {
                                         ArtistPhoto(artist: a).frame(width: 36, height: 36).clipShape(Circle())
+                                    .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
                                         Text(a.name)
                                         Spacer()
                                         FavoriteButton(kind: "artist", id: a.id)   // tap to remove

@@ -52,57 +52,155 @@ struct RootView: View {
     @State private var path = NavigationPath()
     @State private var showNowPlaying = false
     @State private var sidebarHeight: CGFloat = 800          // measured column height
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+    @State private var isCompact = false                     // mirrors layout mode for sheets
 
     var body: some View {
-        // Manual two-column layout (NOT NavigationSplitView): a fixed sidebar column
-        // and a content column that OWNS the player. This guarantees the player is
-        // confined to the content column — NavigationSplitView lets a bottom bar span
-        // the full window under the sidebar, which we don't want.
-        HStack(spacing: 0) {
-            // Floating rounded-rectangle sidebar card: material fill, rounded corners,
-            // inset on all sides, with a soft drop shadow. zIndex(1) draws it above the
-            // content so the shadow falls over the content's left edge.
-            sidebar
-                .frame(width: 200)
-                .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(color: .black.opacity(0.25), radius: 3, x: 0, y: 1)
-                .padding(.leading, 12)
-                .padding(.trailing, 8)
-                .padding(.vertical, 12)
-                .zIndex(1)
-            VStack(spacing: 0) {
-                NavigationStack(path: $path) {
-                    content
-                        .toolbar(.hidden, for: .navigationBar)
-                        .navigationDestination(for: Artist.self) { ArtistDetailView(artist: $0).onAppear { highlight(.artists) } }
-                        .navigationDestination(for: Album.self) { AlbumDetailView(album: $0).onAppear { highlight(nil) } }
-                        .navigationDestination(for: Genre.self) { GenreArtistsView(genre: $0).onAppear { highlight(.genres) } }
-                        .navigationDestination(for: Tag.self) { TagAlbumsView(tag: $0).onAppear { highlight(.tags) } }
-                        .navigationDestination(for: CatalogPlaylist.self) { CatalogPlaylistDetailView(playlist: $0).onAppear { highlight(nil) } }
-                }
-                // Lists draw a darker grouped background by default; hide it so List-based
-                // pages (Artists/Genres/Tags/Songs/Featured) match the ScrollView pages.
-                .scrollContentBackground(.hidden)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                MiniPlayer(onExpand: { showNowPlaying = true })
+        GeometryReader { geo in
+            // Compact (iPhone) when the width is phone-sized OR the size class is compact.
+            // (Mac Catalyst always reports .regular, so the width check drives the
+            // iPhone-sized preview window; real iPhones also hit the size-class check.)
+            let compact = hSizeClass == .compact || geo.size.width < 600
+            Group {
+                if compact { compactLayout } else { regularLayout }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(.systemBackground))
+            .environment(\.isPhoneLayout, compact)
+            .frame(width: geo.size.width, height: geo.size.height)
+            .onAppear { isCompact = compact }
+            .onChange(of: compact) { _, v in isCompact = v }
         }
-        // On iPad the home-indicator safe area would push the floating sidebar
-        // and mini-player cards up, leaving a white gap below them. Mac Catalyst
-        // has no bottom safe area, so it already fills. Ignoring the bottom safe
-        // area makes both behave like the Mac: the cards float their intended
-        // small inset (10–12pt) from the physical bottom edge on every device.
-        .ignoresSafeArea(.container, edges: .bottom)
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .onChange(of: path) { _, newPath in
             if newPath.isEmpty { navHighlight = nil }
         }
-        .sheet(isPresented: $showNowPlaying) { NowPlayingView() }
+        .sheet(isPresented: $showNowPlaying) {
+            NowPlayingView(
+                onOpenAlbum: { album in
+                    showNowPlaying = false
+                    DispatchQueue.main.async { path.append(album) }
+                },
+                onOpenArtist: { album in
+                    showNowPlaying = false
+                    if let artist = model.catalog?.artist(id: album.artistId) {
+                        DispatchQueue.main.async { path.append(artist) }
+                    }
+                }
+            )
+            .environment(\.isPhoneLayout, isCompact)
+        }
         .background(MacWindowConfigurator())
+    }
+
+    /// Shared navigation stack (content + drill-down destinations), reused by both the
+    /// sidebar (regular) and tab-bar (compact) layouts.
+    private var mainNavStack: some View {
+        NavigationStack(path: $path) {
+            content
+                .background(InteractivePopGestureEnabler())   // swipe-back works even with hidden nav bar
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: Artist.self) { ArtistDetailView(artist: $0).onAppear { highlight(.artists) } }
+                .navigationDestination(for: Album.self) { AlbumDetailView(album: $0).onAppear { highlight(nil) } }
+                .navigationDestination(for: Genre.self) { GenreArtistsView(genre: $0).onAppear { highlight(.genres) } }
+                .navigationDestination(for: Tag.self) { TagAlbumsView(tag: $0).onAppear { highlight(.tags) } }
+                .navigationDestination(for: CatalogPlaylist.self) { CatalogPlaylistDetailView(playlist: $0).onAppear { highlight(nil) } }
+        }
+        // Hide the default grouped List background so List pages match the ScrollView pages.
+        .scrollContentBackground(.hidden)
+    }
+
+    // MARK: Regular layout (Mac / iPad) — floating sidebar card + content column
+
+    private var regularLayout: some View {
+        HStack(spacing: 0) {
+            // Floating rounded-rectangle sidebar card with a soft drop shadow drawn over
+            // the content (zIndex 1).
+            sidebar
+                .frame(width: 140)
+                .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.375), radius: 1.5, x: 0, y: 1)
+                .padding(.leading, 12)
+                .padding(.trailing, 8)
+                .padding(.vertical, 12)
+                .zIndex(1)
+            VStack(spacing: 0) {
+                mainNavStack.frame(maxWidth: .infinity, maxHeight: .infinity)
+                MiniPlayer(onExpand: { showNowPlaying = true })
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemBackground))
+        }
+        // Let the floating cards reach the physical bottom edge (iPad home-indicator area).
+        .ignoresSafeArea(.container, edges: .bottom)
+    }
+
+    // MARK: Compact layout (iPhone) — content + docked player + bottom tab bar
+
+    private var compactLayout: some View {
+        VStack(spacing: 0) {
+            topBar
+            mainNavStack.frame(maxWidth: .infinity, maxHeight: .infinity)
+            MiniPlayer(onExpand: { showNowPlaying = true })
+            tabBar
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+
+    // iPhone: browse-by categories in the top bar; library/search/settings in the bottom bar.
+    private var topBarItems: [SidebarItem] { [.popular, .artists, .albums, .songs, .genres, .search] }
+    private var compactTabs: [SidebarItem] { [.favorites, .myPlaylists, .tags, .playlists, .settings] }
+
+    private var topBar: some View {
+        HStack(spacing: 0) {
+            ForEach(topBarItems) { compactBarButton($0) }
+        }
+        .background(Color(.systemGray6).ignoresSafeArea(edges: .top))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(compactTabs) { compactBarButton($0) }
+        }
+        .padding(.top, 4)
+        .background(
+            ZStack(alignment: .bottom) {
+                Color(.systemGray6)
+                // iPhone: drop the wordmark into the home-indicator safe-area space below
+                // the tab buttons. It's in the background, so the toolbar isn't moved/resized.
+                if UIDevice.current.userInterfaceIdiom == .phone {
+                    BrandImage(name: "magnatune_logo")
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 32)
+                        .padding(.bottom, 4)
+                        .allowsHitTesting(false)
+                }
+            }
+            .ignoresSafeArea(edges: .bottom)   // extend behind home indicator
+        )
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    /// A top-/bottom-bar button: icon above label, tinted when its section is selected.
+    private func compactBarButton(_ item: SidebarItem) -> some View {
+        let selected = selection == item
+        return Button {
+            navHighlight = nil
+            selection = item
+            path = NavigationPath()
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: item.icon).font(.system(size: 19))
+                Text(item.title).font(.caption2).lineLimit(1).minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .foregroundStyle(selected ? Color.accentColor : .secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var sidebar: some View {
@@ -136,13 +234,16 @@ struct RootView: View {
                 // Mascot has its own horizontal line baked in (row 371/392). Size by
                 // height = 10% of the column, center it, and clip the sides at the
                 // column edges. The baked-in line lands at the top of the Search block.
-                let mh = sidebarHeight * 0.10
-                BrandImage(name: "magnatune_mascot")
-                    .frame(width: mh * (1000.0 / 392.0), height: mh)  // aspect-correct
-                    .frame(maxWidth: .infinity)                        // center in column
-                    .clipped()                                         // clip L/R at edges
-                    .offset(y: -(mh * 371.0 / 392.0) - 6)              // line at block top (mascot nudged 6px down)
-                    .allowsHitTesting(false)
+                // Hidden on iPhone (the sidebar can appear in Max landscape).
+                if UIDevice.current.userInterfaceIdiom != .phone {
+                    let mh = sidebarHeight * 0.10
+                    BrandImage(name: "magnatune_mascot")
+                        .frame(width: mh * (1000.0 / 392.0), height: mh)  // aspect-correct
+                        .frame(maxWidth: .infinity)                        // center in column
+                        .clipped()                                         // clip L/R at edges
+                        .offset(y: -(mh * 371.0 / 392.0) - 6)              // line at block top (mascot nudged 6px down)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .background(GeometryReader { g in

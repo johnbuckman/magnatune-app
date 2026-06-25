@@ -1,6 +1,27 @@
 import SwiftUI
 import Kingfisher
 
+/// True when the UI is in the compact (iPhone) layout. Set once by RootView (driven by
+/// width / size class) and read by shared components so they can adapt — notably to
+/// shrink album covers and the player on iPhone without touching the iPad layout.
+private struct PhoneLayoutKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    var isPhoneLayout: Bool {
+        get { self[PhoneLayoutKey.self] }
+        set { self[PhoneLayoutKey.self] = newValue }
+    }
+}
+
+/// Album-cover display dimension: 30% smaller in the iPhone layout, unchanged elsewhere.
+func coverDim(_ base: CGFloat, phone: Bool) -> CGFloat { phone ? base * 0.7 : base }
+
+extension Color {
+    /// Thin, light hairline around artist circles and (non-full-size) album covers (~#D9D9D9).
+    static let artworkBorder = Color(white: 0.85)
+}
+/// Width of the artwork hairline border (≈ 1px on retina).
+let artworkBorderWidth: CGFloat = 0.5
+
 /// Loads a bundled PNG (loose resource) by name.
 struct BrandImage: View {
     let name: String
@@ -42,6 +63,7 @@ struct CoverImage: View {
             .fade(duration: 0.2)
             .aspectRatio(1, contentMode: .fill)
             .clipShape(RoundedRectangle(cornerRadius: corner))
+            .overlay(RoundedRectangle(cornerRadius: corner).stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
     }
 
     private var placeholder: some View {
@@ -222,6 +244,7 @@ struct AddToPlaylistSheet: View {
 struct SongRow: View {
     @EnvironmentObject var user: UserStore
     @EnvironmentObject var audio: AudioPlayer
+    @Environment(\.isPhoneLayout) private var isPhone
     let track: PlayableTrack
     var showArtwork = false
     var onPlay: () -> Void
@@ -252,13 +275,14 @@ struct SongRow: View {
     }
 
     @ViewBuilder private var leading: some View {
+        let art = coverDim(40, phone: isPhone)
         if isCurrent {
             Image(systemName: audio.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
                 .foregroundStyle(Color.accentColor)
-                .frame(width: showArtwork ? 40 : 26)
+                .frame(width: showArtwork ? art : 26)
         } else if showArtwork {
             CoverImage(artistName: track.artistName, albumName: track.album.name, points: 40)
-                .frame(width: 40, height: 40)
+                .frame(width: art, height: art)
         } else if let n = track.song.trackNo {
             Text("\(n)").font(.callout.monospacedDigit()).foregroundStyle(.secondary).frame(width: 26, alignment: .trailing)
         } else {

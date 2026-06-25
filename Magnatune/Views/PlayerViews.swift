@@ -61,6 +61,7 @@ struct SeekBar: View {
 
 struct MiniPlayer: View {
     @EnvironmentObject var audio: AudioPlayer
+    @Environment(\.isPhoneLayout) private var isPhone
     var onExpand: () -> Void
 
     private var hasTrack: Bool { audio.current != nil }
@@ -97,42 +98,53 @@ struct MiniPlayer: View {
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.25), radius: 3, x: 0, y: 1)
+        .shadow(color: .black.opacity(0.375), radius: 1.5, x: 0, y: 1)
         .padding(.horizontal, 10).padding(.bottom, 10).padding(.top, 2)
     }
 
     @ViewBuilder private var artwork: some View {
+        let dim = coverDim(44, phone: isPhone)
         if let track = audio.current {
             CoverImage(artistName: track.artistName, albumName: track.album.name, points: 44)
-                .frame(width: 44, height: 44)
+                .frame(width: dim, height: dim)
         } else {
             RoundedRectangle(cornerRadius: 6).fill(.quaternary)
-                .frame(width: 44, height: 44)
+                .frame(width: dim, height: dim)
                 .overlay(Image(systemName: "music.note").foregroundStyle(.secondary))
         }
     }
 
-    private var airplayPill: some View {
-        HStack(spacing: 4) {
+    @ViewBuilder private var airplayPill: some View {
+        if isPhone {
+            // iPhone: just the AirPlay icon (no route text / pill).
             Image(systemName: "airplayaudio")
-            if !audio.outputRouteName.isEmpty {
-                Text(audio.outputRouteName).lineLimit(1)
+                .font(.subheadline)
+                .foregroundStyle(audio.isExternalRoute ? Color.accentColor : .secondary)
+                .frame(width: 30, height: 28)
+                .contentShape(Rectangle())
+                .overlay(RoutePickerView(visible: false))
+        } else {
+            HStack(spacing: 4) {
+                Image(systemName: "airplayaudio")
+                if !audio.outputRouteName.isEmpty {
+                    Text(audio.outputRouteName).lineLimit(1)
+                }
             }
+            .font(.caption2)
+            .foregroundStyle(audio.isExternalRoute ? Color.accentColor : .secondary)
+            .frame(maxWidth: 140)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.secondary.opacity(0.5), lineWidth: 1))
+            .overlay(RoutePickerView(visible: false))   // tap = open output picker
         }
-        .font(.caption2)
-        .foregroundStyle(audio.isExternalRoute ? Color.accentColor : .secondary)
-        .frame(maxWidth: 140)
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .overlay(RoundedRectangle(cornerRadius: 8)
-            .stroke(Color.secondary.opacity(0.5), lineWidth: 1))
-        .overlay(RoutePickerView(visible: false))   // tap = open output picker
     }
 
     private func transportButton(_ system: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: system)
                 .font(.subheadline)
-                .frame(width: 52, height: 28)
+                .frame(width: isPhone ? 26 : 52, height: 28)   // iPhone: half width
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.accentColor, lineWidth: 1))
                 .contentShape(Rectangle())
         }
@@ -149,7 +161,11 @@ struct MiniPlayer: View {
 struct NowPlayingView: View {
     @EnvironmentObject var audio: AudioPlayer
     @Environment(\.dismiss) private var dismiss
-    @State private var showCover = false
+    @Environment(\.isPhoneLayout) private var isPhone
+    /// Tapping the artwork / song / album opens the album page; the artist name opens
+    /// the artist page. Both pass the current track's album (artist is resolved from it).
+    var onOpenAlbum: (Album) -> Void = { _ in }
+    var onOpenArtist: (Album) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -157,13 +173,20 @@ struct NowPlayingView: View {
                 Capsule().fill(.secondary).frame(width: 40, height: 5).padding(.top, 8)
                 Spacer()
                 CoverImage(artistName: track.artistName, albumName: track.album.name, points: 360, corner: 12)
-                    .frame(maxWidth: 360, maxHeight: 360)
+                    .frame(maxWidth: coverDim(360, phone: isPhone), maxHeight: coverDim(360, phone: isPhone))
                     .shadow(radius: 12)
-                    .onTapGesture { showCover = true }
+                    .contentShape(Rectangle())
+                    .onTapGesture { onOpenAlbum(track.album) }
                 VStack(spacing: 4) {
                     Text(track.song.name).font(.title2.bold()).multilineTextAlignment(.center)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onOpenAlbum(track.album) }
                     Text(track.artistName).font(.title3).foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onOpenArtist(track.album) }
                     Text(track.album.name).font(.callout).foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onOpenAlbum(track.album) }
                 }
                 progressBar
                 controls
@@ -173,14 +196,8 @@ struct NowPlayingView: View {
             }
         }
         .padding(.horizontal, 32)
+        .padding(.bottom, isPhone ? 28 : 0)   // keep the controls clear of the bottom edge on iPhone
         .frame(minWidth: 380, minHeight: 560)
-        .fullScreenCover(isPresented: $showCover) {
-            if let t = audio.current {
-                FullScreenImage(
-                    url: URLBuilder.coverURL(artistName: t.artistName, albumName: t.album.name, size: 1400),
-                    placeholderURL: URLBuilder.coverURL(artistName: t.artistName, albumName: t.album.name, size: 600))
-            }
-        }
     }
 
     private var progressBar: some View {

@@ -24,6 +24,10 @@ final class AudioPlayer: ObservableObject {
     @Published var duration: Double = 0
     @Published private(set) var outputRouteName: String = ""
     @Published private(set) var isExternalRoute = false
+    /// Persistent shuffle mode. When on, starting playback shuffles the queue.
+    @Published var shuffleEnabled: Bool = UserDefaults.standard.bool(forKey: "shuffle.enabled") {
+        didSet { UserDefaults.standard.set(shuffleEnabled, forKey: "shuffle.enabled") }
+    }
 
     var current: PlayableTrack? { queue.indices.contains(index) ? queue[index] : nil }
 
@@ -68,8 +72,17 @@ final class AudioPlayer: ObservableObject {
     func play(tracks: [PlayableTrack], startAt: Int = 0) {
         guard !tracks.isEmpty else { return }
         cancelCrossfade()
-        queue = tracks
-        index = max(0, min(startAt, tracks.count - 1))
+        var ordered = tracks
+        var start = max(0, min(startAt, tracks.count - 1))
+        if shuffleEnabled {
+            // Play the chosen track first, then the rest in random order.
+            let chosen = ordered.remove(at: start)
+            ordered.shuffle()
+            ordered.insert(chosen, at: 0)
+            start = 0
+        }
+        queue = ordered
+        index = start
         loadCurrent(autoPlay: true)
     }
 

@@ -4,6 +4,7 @@ import SwiftUI
 
 struct PopularView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.isPhoneLayout) private var isPhone
     @State private var sections: [(genre: Genre, albums: [Album])] = []
     @State private var names: [Int64: String] = [:]
 
@@ -19,10 +20,11 @@ struct PopularView: View {
                                 LazyHStack(alignment: .top, spacing: 16) {
                                     ForEach(albums) { album in
                                         AlbumCell(album: album, artistName: names[album.artistId] ?? "")
-                                            .frame(width: 150)
+                                            .frame(width: coverDim(150, phone: isPhone))
                                     }
                                 }
                                 .padding(.bottom, 14)
+                                .mouseDraggableScroll()   // click-drag to scroll on Mac
                             }
                         }
                     }
@@ -63,6 +65,7 @@ struct ArtistsView: View {
                 NavigationLink(value: artist) {
                     HStack(spacing: 12) {
                         ArtistPhoto(artist: artist).frame(width: 44, height: 44).clipShape(Circle())
+                            .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
                         Text(artist.name)
                         Spacer()
                         FavoriteButton(kind: "artist", id: artist.id)
@@ -95,11 +98,12 @@ struct AlbumCell: View {
 
 struct AlbumsView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.isPhoneLayout) private var isPhone
     @State private var albums: [Album] = []
     @State private var names: [Int64: String] = [:]
     @State private var query = ""
 
-    private let cols = [GridItem(.adaptive(minimum: 150), spacing: 16)]
+    private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
 
     var filtered: [Album] {
         let base = query.isEmpty ? albums : albums.filter { $0.name.localizedCaseInsensitiveContains(query) }
@@ -206,6 +210,7 @@ struct GenreArtistsView: View {
             NavigationLink(value: artist) {
                 HStack(spacing: 12) {
                     ArtistPhoto(artist: artist).frame(width: 40, height: 40).clipShape(Circle())
+                        .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
                     Text(artist.name)
                     Spacer()
                     FavoriteButton(kind: "artist", id: artist.id)
@@ -245,10 +250,11 @@ struct TagsView: View {
 
 struct TagAlbumsView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.isPhoneLayout) private var isPhone
     let tag: Tag
     @State private var albums: [Album] = []
     @State private var names: [Int64: String] = [:]
-    private let cols = [GridItem(.adaptive(minimum: 150), spacing: 16)]
+    private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
 
     var body: some View {
         ScrollView {

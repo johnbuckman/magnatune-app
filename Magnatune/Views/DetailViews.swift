@@ -2,10 +2,11 @@ import SwiftUI
 
 struct ArtistDetailView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.isPhoneLayout) private var isPhone
     let artist: Artist
     @State private var albums: [Album] = []
     @State private var showPhoto = false
-    private let cols = [GridItem(.adaptive(minimum: 150), spacing: 16)]
+    private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
 
     var body: some View {
         ScrollView {
@@ -13,6 +14,7 @@ struct ArtistDetailView: View {
                 HStack(alignment: .top, spacing: 16) {
                     ArtistPhoto(artist: artist)
                         .frame(width: 120, height: 120).clipShape(Circle())
+                        .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
                         .onTapGesture { showPhoto = true }
                     VStack(alignment: .leading, spacing: 8) {
                         Text(artist.name).font(.largeTitle.bold())
@@ -50,6 +52,7 @@ struct ArtistDetailView: View {
 struct AlbumDetailView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var audio: AudioPlayer
+    @Environment(\.isPhoneLayout) private var isPhone
     let album: Album
     @State private var tracks: [PlayableTrack] = []
     @State private var artist: Artist?
@@ -64,7 +67,7 @@ struct AlbumDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 16) {
                     CoverImage(artistName: artistName, albumName: album.name, points: 200)
-                        .frame(width: 200, height: 200)
+                        .frame(width: coverDim(200, phone: isPhone), height: coverDim(200, phone: isPhone))
                         .onTapGesture { showCover = true }
                     VStack(alignment: .leading, spacing: 8) {
                         Text(album.name).font(.largeTitle.bold())
@@ -83,14 +86,20 @@ struct AlbumDetailView: View {
                         HStack {
                             Button {
                                 audio.play(tracks: shown, startAt: 0)
-                            } label: { Label("Play", systemImage: "play.fill") }
+                            } label: {
+                                if isPhone { Image(systemName: "play.fill") }
+                                else { Label("Play", systemImage: "play.fill") }
+                            }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(shown.isEmpty)
                             Button {
-                                audio.play(tracks: shown.shuffled(), startAt: 0)
-                            } label: { Label("Shuffle", systemImage: "shuffle") }
+                                audio.shuffleEnabled.toggle()   // on/off mode, doesn't start playback
+                            } label: {
+                                Image(systemName: "shuffle")
+                            }
                                 .buttonStyle(.bordered)
-                                .disabled(shown.isEmpty)
+                                .tint(audio.shuffleEnabled ? Color.accentColor : .secondary)
+                                .help(audio.shuffleEnabled ? "Shuffle on" : "Shuffle off")
                             FavoriteButton(kind: "album", id: album.id)
                             AddToPlaylistButton { shown.map { $0.song.id } }
                         }
