@@ -137,12 +137,14 @@ struct SongsView: View {
     var body: some View {
         VStack(spacing: 0) {
             SearchField(text: $query, prompt: "Search songs")
-            List {
-                if query.isEmpty {
-                    ContentUnavailableView("Search Songs", systemImage: "magnifyingglass",
-                                           description: Text("There are ~24,000 tracks. Type to search by title."))
-                } else {
-                    let shown = model.visibleTracks(results)
+            if query.isEmpty {
+                // Vertically centered empty state, matching Favorites/Playlists.
+                ContentUnavailableView("Search Songs", systemImage: "magnifyingglass",
+                                       description: Text("There are ~24,000 tracks. Type to search by title."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                let shown = model.visibleTracks(results)
+                List {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { idx, track in
                         SongRow(track: track, showArtwork: true) {
                             model.audio.play(tracks: shown, startAt: idx)

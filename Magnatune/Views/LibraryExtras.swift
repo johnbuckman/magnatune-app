@@ -14,39 +14,64 @@ struct SearchView: View {
         let vArtists = model.visibleArtists(artists)
         let vAlbums = model.visibleAlbums(albums)
         let vSongs = model.visibleTracks(songs)
-        VStack(spacing: 0) {
-            SearchField(text: $query, prompt: "Artists, albums, songs")
-            List {
-                if !vArtists.isEmpty {
-                    Section("Artists") {
-                        ForEach(vArtists) { a in
-                            NavigationLink(value: a) { Label(a.name, systemImage: "person") }
+        let hasResults = !vArtists.isEmpty || !vAlbums.isEmpty || !vSongs.isEmpty
+        Group {
+            if hasResults {
+                VStack(spacing: 0) {
+                    searchInput.padding(.vertical, 12)
+                    List {
+                        if !vArtists.isEmpty {
+                            Section("Artists") {
+                                ForEach(vArtists) { a in
+                                    NavigationLink(value: a) { Label(a.name, systemImage: "person") }
+                                }
+                            }
                         }
-                    }
-                }
-                if !vAlbums.isEmpty {
-                    Section("Albums") {
-                        ForEach(vAlbums) { al in
-                            NavigationLink(value: al) {
-                                Text("\(al.name) — \(names[al.artistId] ?? "")")
+                        if !vAlbums.isEmpty {
+                            Section("Albums") {
+                                ForEach(vAlbums) { al in
+                                    NavigationLink(value: al) {
+                                        Text("\(al.name) — \(names[al.artistId] ?? "")")
+                                    }
+                                }
+                            }
+                        }
+                        if !vSongs.isEmpty {
+                            Section("Songs") {
+                                ForEach(Array(vSongs.enumerated()), id: \.element.id) { idx, t in
+                                    SongRow(track: t, showArtwork: true) { model.audio.play(tracks: vSongs, startAt: idx) }
+                                }
                             }
                         }
                     }
                 }
-                if !vSongs.isEmpty {
-                    Section("Songs") {
-                        ForEach(Array(vSongs.enumerated()), id: \.element.id) { idx, t in
-                            SongRow(track: t, showArtwork: true) { model.audio.play(tracks: vSongs, startAt: idx) }
-                        }
+            } else {
+                // Nothing yet: search box vertically centered with a label above it.
+                VStack(spacing: 16) {
+                    Spacer()
+                    searchInput
+                    if query.count >= 2 {
+                        ContentUnavailableView.search(text: query)
                     }
+                    Spacer()
                 }
-                if query.count >= 2, vArtists.isEmpty, vAlbums.isEmpty, vSongs.isEmpty {
-                    ContentUnavailableView.search(text: query)
-                }
+                .padding()
             }
         }
         .onChange(of: query) { _, q in search(q) }
         .navigationTitle("Search")
+    }
+
+    /// Centered label + constrained search field, used at the top (with results) or
+    /// vertically centered (before searching).
+    private var searchInput: some View {
+        VStack(spacing: 10) {
+            Text("Search Magnatune")
+                .font(.title2.bold())
+            SearchField(text: $query, prompt: "Artists, albums, songs")
+                .frame(maxWidth: 460)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func search(_ q: String) {
@@ -73,50 +98,53 @@ struct FavoritesView: View {
         let vArtists = model.visibleArtists(artists)
         let vAlbums = model.visibleAlbums(albums)
         let vSongs = model.visibleTracks(songs)
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                if !vArtists.isEmpty {
-                    header("Artists") { playFavoriteArtists() }
-                    ForEach(vArtists) { a in
-                        NavigationLink(value: a) {
-                            HStack {
-                                ArtistPhoto(artist: a).frame(width: 36, height: 36).clipShape(Circle())
-                                Text(a.name)
-                                Spacer()
-                                FavoriteButton(kind: "artist", id: a.id)   // tap to remove
+        Group {
+            if vArtists.isEmpty && vAlbums.isEmpty && vSongs.isEmpty {
+                // Vertically centered empty state, matching the Playlists page.
+                ContentUnavailableView("No Favorites Yet", systemImage: "heart",
+                                       description: Text(model.isOnline
+                                           ? "Tap the heart on any song, album, or artist."
+                                           : "You're offline. Favorites you've downloaded will appear here."))
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        if !vArtists.isEmpty {
+                            header("Artists") { playFavoriteArtists() }
+                            ForEach(vArtists) { a in
+                                NavigationLink(value: a) {
+                                    HStack {
+                                        ArtistPhoto(artist: a).frame(width: 36, height: 36).clipShape(Circle())
+                                        Text(a.name)
+                                        Spacer()
+                                        FavoriteButton(kind: "artist", id: a.id)   // tap to remove
+                                    }
+                                }.buttonStyle(.plain)
                             }
-                        }.buttonStyle(.plain)
-                    }
-                }
-                if !vAlbums.isEmpty {
-                    header("Albums") { playFavoriteAlbums() }
-                    LazyVGrid(columns: cols, spacing: 16) {
-                        ForEach(vAlbums) { al in
-                            AlbumCell(album: al, artistName: names[al.artistId] ?? "")
-                                .overlay(alignment: .topTrailing) {
-                                    FavoriteButton(kind: "album", id: al.id)   // tap to remove
-                                        .padding(6)
-                                        .background(.regularMaterial, in: Circle())
-                                        .padding(6)
+                        }
+                        if !vAlbums.isEmpty {
+                            header("Albums") { playFavoriteAlbums() }
+                            LazyVGrid(columns: cols, spacing: 16) {
+                                ForEach(vAlbums) { al in
+                                    AlbumCell(album: al, artistName: names[al.artistId] ?? "")
+                                        .overlay(alignment: .topTrailing) {
+                                            FavoriteButton(kind: "album", id: al.id)   // tap to remove
+                                                .padding(6)
+                                                .background(.regularMaterial, in: Circle())
+                                                .padding(6)
+                                        }
                                 }
+                            }
+                        }
+                        if !vSongs.isEmpty {
+                            header("Songs") { model.audio.play(tracks: vSongs, startAt: 0) }
+                            ForEach(Array(vSongs.enumerated()), id: \.element.id) { idx, t in
+                                SongRow(track: t, showArtwork: true) { model.audio.play(tracks: vSongs, startAt: idx) }
+                            }
                         }
                     }
-                }
-                if !vSongs.isEmpty {
-                    header("Songs") { model.audio.play(tracks: vSongs, startAt: 0) }
-                    ForEach(Array(vSongs.enumerated()), id: \.element.id) { idx, t in
-                        SongRow(track: t, showArtwork: true) { model.audio.play(tracks: vSongs, startAt: idx) }
-                    }
-                }
-                if vSongs.isEmpty && vAlbums.isEmpty && vArtists.isEmpty {
-                    ContentUnavailableView("No Favorites Yet", systemImage: "heart",
-                                           description: Text(model.isOnline
-                                               ? "Tap the heart on any song, album, or artist."
-                                               : "You're offline. Favorites you've downloaded will appear here."))
-                        .padding(.top, 40)
+                    .padding()
                 }
             }
-            .padding()
         }
         .navigationTitle("Favorites")
         .task(id: favSignature) { load() }

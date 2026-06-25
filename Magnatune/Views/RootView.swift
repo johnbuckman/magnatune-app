@@ -90,6 +90,12 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemBackground))
         }
+        // On iPad the home-indicator safe area would push the floating sidebar
+        // and mini-player cards up, leaving a white gap below them. Mac Catalyst
+        // has no bottom safe area, so it already fills. Ignoring the bottom safe
+        // area makes both behave like the Mac: the cards float their intended
+        // small inset (10–12pt) from the physical bottom edge on every device.
+        .ignoresSafeArea(.container, edges: .bottom)
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .onChange(of: path) { _, newPath in
