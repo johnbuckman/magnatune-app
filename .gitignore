@@ -1,0 +1,17 @@
+# Build output (large; regenerated)
+build/
+build-ios/
+build-osx/
+DerivedData/
+
+# XcodeGen-generated project — regenerate with `xcodegen generate` from project.yml
+Magnatune.xcodeproj/
+
+# Xcode / SPM local state
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# macOS
+.DS_Store

@@ -1,0 +1,57 @@
+name: Magnatune
+options:
+  bundleIdPrefix: com.magnatune
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: "7.0.0"
+  Kingfisher:
+    url: https://github.com/onevcat/Kingfisher
+    from: "8.0.0"
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    from: "0.9.19"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: XD9V8H8S2N
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  Magnatune:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Magnatune
+    dependencies:
+      - package: GRDB
+      - package: Kingfisher
+      - package: ZIPFoundation
+    settings:
+      base:
+        SUPPORTS_MACCATALYST: "YES"
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
+        # 1,2,6 = iPhone, iPad, Mac. Adding 6 selects "Optimize Interface for Mac"
+        # (native Mac control sizing + .mac idiom) instead of "Scale to match iPad".
+        TARGETED_DEVICE_FAMILY: "1,2,6"
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: "NO"
+        PRODUCT_BUNDLE_IDENTIFIER: com.magnatune.player
+        PRODUCT_NAME: Magnatune
+        INFOPLIST_FILE: Magnatune/App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Magnatune/App/Magnatune.entitlements
+        GENERATE_INFOPLIST_FILE: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: "YES"
+        SWIFT_EMIT_LOC_STRINGS: "YES"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"

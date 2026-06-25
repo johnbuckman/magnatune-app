@@ -1,0 +1,82 @@
+import Foundation
+
+/// Downloads and refreshes the catalog SQLite database.
+///
+/// Flow: GET magnatune.com/info/changed.txt (a CRC). If it differs from the stored
+/// value (or no catalog exists yet), download sqlite_normalized.db.gz, gunzip, and
+/// atomically replace the on-disk catalog. A seed copy is bundled so the app is
+/// usable offline on first launch.
+final class CatalogSync {
+    static let changedURL = URL(string: "http://magnatune.com/info/changed.txt")!
+    // Plain (uncompressed) db avoids needing a gunzip step; ~7MB on refresh.
+    static let dbURL = URL(string: "http://he3.magnatune.com/info/sqlite_normalized.db")!
+
+    private let fm = FileManager.default
+    private let crcKey = "catalog.crc"
+    private let lastCheckKey = "catalog.lastCheck"
+
+    /// Where the live catalog db is stored in Application Support.
+    static func catalogPath() -> String {
+        let dir = try! FileManager.default.url(for: .applicationSupportDirectory,
+                                               in: .userDomainMask, appropriateFor: nil, create: true)
+        return dir.appendingPathComponent("magnatune_catalog.db").path
+    }
+
+    /// Ensure a catalog exists at the target path, seeding from the bundle if needed.
+    func ensureSeeded() {
+        let target = Self.catalogPath()
+        guard !fm.fileExists(atPath: target) else { return }
+        if let bundled = Bundle.main.url(forResource: "magnatune", withExtension: "db") {
+            try? fm.copyItem(at: bundled, to: URL(fileURLWithPath: target))
+        }
+    }
+
+    /// Check the CRC and refresh if changed. Throttled to once / 24h unless `force`.
+    /// Returns true if a new catalog was installed.
+    @discardableResult
+    func refreshIfNeeded(force: Bool = false) async -> Bool {
+        let defaults = UserDefaults.standard
+        if !force {
+            let last = defaults.double(forKey: lastCheckKey)
+            if last > 0, Date().timeIntervalSince1970 - last < 24 * 3600 { return false }
+        }
+        defaults.set(Date().timeIntervalSince1970, forKey: lastCheckKey)
+
+        guard let crc = await fetchCRC() else { return false }
+        let stored = defaults.string(forKey: crcKey)
+        let haveFile = fm.fileExists(atPath: Self.catalogPath())
+        guard force || crc != stored || !haveFile else { return false }
+
+        if await downloadAndInstall() {
+            defaults.set(crc, forKey: crcKey)
+            return true
+        }
+        return false
+    }
+
+    private func fetchCRC() async -> String? {
+        do {
+            let (data, _) = try await URLSession.shared.data(from: Self.changedURL)
+            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch { return nil }
+    }
+
+    private func downloadAndInstall() async -> Bool {
+        do {
+            let (tmp, _) = try await URLSession.shared.download(from: Self.dbURL)
+            let raw = try Data(contentsOf: tmp)
+            let target = URL(fileURLWithPath: Self.catalogPath())
+            let staging = target.deletingLastPathComponent().appendingPathComponent("catalog_new.db")
+            try? fm.removeItem(at: staging)
+            try raw.write(to: staging)
+            // basic sanity check: SQLite header
+            if raw.count < 100 || !raw.prefix(15).elementsEqual(Array("SQLite format 3".utf8)) {
+                try? fm.removeItem(at: staging); return false
+            }
+            _ = try? fm.replaceItemAt(target, withItemAt: staging)
+            return true
+        } catch {
+            return false
+        }
+    }
+}
