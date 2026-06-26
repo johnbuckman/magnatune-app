@@ -7,7 +7,7 @@ import Foundation
 /// atomically replace the on-disk catalog. A seed copy is bundled so the app is
 /// usable offline on first launch.
 final class CatalogSync {
-    static let changedURL = URL(string: "http://magnatune.com/info/changed.txt")!
+    static let changedURL = URL(string: "http://he3.magnatune.com/info/changed.txt")!
     // Plain (uncompressed) db avoids needing a gunzip step; ~7MB on refresh.
     static let dbURL = URL(string: "http://he3.magnatune.com/info/sqlite_normalized.db")!
 

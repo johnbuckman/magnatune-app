@@ -18,6 +18,8 @@ struct SettingsView: View {
     @State private var showFoundersRant = false
     @AppStorage("audio.cache.enabled") private var audioCacheEnabled = true
     @AppStorage("crossfade.enabled") private var crossfadeEnabled = true
+    @AppStorage("crossfade.duration") private var crossfadeDuration = 6.0
+    @AppStorage(StreamQuality.defaultsKey) private var streamQualityRaw = StreamQuality.normal.rawValue
 
     enum SignInResult { case success, failure }
 
@@ -61,17 +63,41 @@ struct SettingsView: View {
                 }
             }
 
-            Section {
-                Toggle("Crossfade between songs", isOn: $crossfadeEnabled)
-            } header: { Text("Playback") } footer: {
-                Text("Smoothly fades the end of each track into the next.")
-            }
+            groupDivider
 
             Section {
+                Toggle("Crossfade between songs", isOn: $crossfadeEnabled)
+                if crossfadeEnabled {
+                    HStack(spacing: 12) {
+                        Text("Duration")
+                        Slider(value: $crossfadeDuration, in: 1...10, step: 1)
+                        Text("\(Int(crossfadeDuration))s")
+                            .monospacedDigit().foregroundStyle(.secondary)
+                            .frame(width: 32, alignment: .trailing)
+                    }
+                }
+            } header: { Text("Playback") } footer: {
+                Text("Smoothly fades the end of each track into the next, over the chosen duration (1–10 seconds).")
+            }
+
+            groupDivider
+
+            Section {
+                if creds.isMember {
+                    Picker("Audio quality", selection: $streamQualityRaw) {
+                        ForEach(StreamQuality.allCases) { q in
+                            Text("\(q.label) — \(q.detail)").tag(q.rawValue)
+                        }
+                    }
+                }
                 Toggle("Cache streamed music on device", isOn: $audioCacheEnabled)
             } header: { Text("Streaming") } footer: {
-                Text("Tracks stream as 128 kbps MP3. When caching is on, tracks you play are saved so they don't re-download next time (and the next track is prefetched to remove gaps). Up to 1 GB.")
+                Text(creds.isMember
+                     ? "Members can stream at Normal (~160 kbps AAC) or Lossless (256 kbps AAC-LC). When caching is on, tracks you play are saved so they don't re-download next time (and the next track is prefetched to remove gaps). Up to 1 GB."
+                     : "Tracks stream as AAC (.m4a). When caching is on, tracks you play are saved so they don't re-download next time (and the next track is prefetched to remove gaps). Up to 1 GB.")
             }
+
+            groupDivider
 
             Section {
                 Toggle("Auto-download favorites", isOn: Binding(
@@ -93,33 +119,46 @@ struct SettingsView: View {
                     }
                 }
             } header: { Text("Downloads") } footer: {
-                Text("Automatically downloads every song, album, and artist you favorite so they're available offline — no extra steps. When you're offline, the app shows only your downloaded music.")
+                Text(creds.isMember
+                     ? "Automatically downloads every song, album, and artist you favorite so they're available offline — no extra steps. When you're offline, the app shows only your downloaded music."
+                     : "Requires a Magnatune membership. Sign in above to download your favorites for offline listening.")
             }
+
+            groupDivider
+
+            Section {
+                Toggle("Share & control on local network", isOn: Binding(
+                    get: { model.peerSharingEnabled },
+                    set: { model.setPeerSharingEnabled($0) }))
+                if model.peerSharingEnabled {
+                    Toggle("Auto-stop other music", isOn: Binding(
+                        get: { model.autoStopOtherMusic },
+                        set: { model.setAutoStopOtherMusic($0) }))
+                }
+            } header: { Text("Local Network") } footer: {
+                Text("Lets this app see other Magnatune apps on your Wi-Fi. When you're not playing here, the player shows what's playing on another device and its buttons control it. Auto-stop other music pauses other Magnatune apps when you start playing here (both devices must have it on).")
+            }
+
+            groupDivider
 
             Section {
                 if !model.catalogReady {
                     LabeledContent("Status", value: "Loading…")
-                } else if model.catalogUpdateAvailable {
+                } else if model.isRefreshing {
                     LabeledContent("Status") {
-                        Button {
-                            Task { await model.refreshCatalog(force: true); await model.checkCatalogUpdate() }
-                        } label: {
-                            HStack(spacing: 8) {
-                                Text("Update available")
-                                if model.isRefreshing { ProgressView().controlSize(.small) }
-                            }
-                            .padding(.horizontal, 12).padding(.vertical, 6)
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor, lineWidth: 1))
+                        HStack(spacing: 8) {
+                            Text("Updating…").foregroundStyle(.secondary)
+                            ProgressView().controlSize(.small)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(model.isRefreshing)
                     }
                 } else {
                     LabeledContent("Status", value: "Up to date")
                 }
             } header: { Text("Catalog") } footer: {
-                Text("The catalog auto-updates at most once per day when magnatune.com reports changes. Tap “Update available” to update now.")
+                Text("New catalog versions from magnatune.com download automatically in the background.")
             }
+
+            groupDivider
 
             Section {
                 LabeledContent("Cached art & photos") {
@@ -153,6 +192,8 @@ struct SettingsView: View {
                 Text("Album art, artist photos, and played tracks are stored on this device so they don't reload over the network.")
             }
 
+            groupDivider
+
             Section("About") {
                 LabeledContent("App", value: "Magnatune Player 0.1")
                 Text("Music licensed Creative Commons by Magnatune (magnatune.com).")
@@ -181,6 +222,15 @@ struct SettingsView: View {
                 Text(foundersRantText)
             }
         }
+    }
+
+    /// A thick full-width rule shown between settings groups.
+    private var groupDivider: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.55))
+            .frame(height: 3)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
     }
 
     private func refreshCacheSize() {

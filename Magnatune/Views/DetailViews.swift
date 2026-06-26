@@ -2,9 +2,11 @@ import SwiftUI
 
 struct ArtistDetailView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var audio: AudioPlayer
     @Environment(\.isPhoneLayout) private var isPhone
     let artist: Artist
     @State private var albums: [Album] = []
+    @State private var tracks: [PlayableTrack] = []
     @State private var showPhoto = false
     private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
 
@@ -19,6 +21,15 @@ struct ArtistDetailView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(artist.name).font(.largeTitle.bold())
                         HStack(spacing: 14) {
+                            let shown = model.visibleTracks(tracks)
+                            Button {
+                                audio.play(tracks: shown, startAt: 0)   // all songs across this artist's albums
+                            } label: {
+                                if isPhone { Image(systemName: "play.fill") }
+                                else { Label("Play", systemImage: "play.fill").frame(minWidth: 120) }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(shown.isEmpty)
                             FavoriteButton(kind: "artist", id: artist.id)
                             AddToPlaylistButton { model.catalog?.songs(forArtist: artist.id).map { $0.id } ?? [] }
                         }
@@ -45,7 +56,12 @@ struct ArtistDetailView: View {
         .fullScreenCover(isPresented: $showPhoto) {
             FullScreenImage(url: URLBuilder.artistPhotoURL(artist))
         }
-        .task { albums = model.catalog?.albums(forArtist: artist.id) ?? [] }
+        .task {
+            albums = model.catalog?.albums(forArtist: artist.id) ?? []
+            if let c = model.catalog {
+                tracks = c.makePlayable(songs: c.songs(forArtist: artist.id))
+            }
+        }
     }
 }
 
@@ -88,7 +104,7 @@ struct AlbumDetailView: View {
                                 audio.play(tracks: shown, startAt: 0)
                             } label: {
                                 if isPhone { Image(systemName: "play.fill") }
-                                else { Label("Play", systemImage: "play.fill") }
+                                else { Label("Play", systemImage: "play.fill").frame(minWidth: 120) }
                             }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(shown.isEmpty)

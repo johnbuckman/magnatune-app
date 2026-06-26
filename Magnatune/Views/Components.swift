@@ -98,14 +98,18 @@ struct FullScreenImage: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            // Base layer: the already-cached lower-res image, shown instantly (no delay).
+            if let placeholderURL {
+                KFImage(placeholderURL)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .scaleEffect(scale)
+            }
+            // Top layer: the high-res image, transparent until downloaded, then fades in
+            // over the cached one.
             KFImage(url)
-                .placeholder {
-                    if let placeholderURL {
-                        KFImage(placeholderURL).resizable().aspectRatio(contentMode: .fit)
-                    } else {
-                        ProgressView().tint(.white)
-                    }
-                }
+                .placeholder { Color.clear }
+                .fade(duration: 0.25)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .scaleEffect(scale)

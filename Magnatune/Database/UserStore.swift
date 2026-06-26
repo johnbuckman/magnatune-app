@@ -91,6 +91,17 @@ final class UserStore: ObservableObject {
         reloadFavorites()
     }
 
+    /// Delete several favorites in one transaction (used to remove redundant favorites).
+    func removeFavorites(_ items: [(kind: String, id: Int64)]) {
+        guard !items.isEmpty else { return }
+        try? dbQueue.write { db in
+            for (kind, id) in items {
+                try db.execute(sql: "DELETE FROM favorites WHERE kind = ? AND ref_id = ?", arguments: [kind, id])
+            }
+        }
+        reloadFavorites()
+    }
+
     func favoriteIDs(kind: String) -> [Int64] {
         (try? dbQueue.read { db in
             try Int64.fetchAll(db, sql: "SELECT ref_id FROM favorites WHERE kind = ? ORDER BY created_at DESC", arguments: [kind])

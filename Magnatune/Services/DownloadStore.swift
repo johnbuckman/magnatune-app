@@ -3,7 +3,7 @@ import Foundation
 /// Persistent, never-evicted on-device store of fully downloaded tracks, keyed by
 /// song id. Distinct from `AudioCache` (a 1 GB LRU cache of *streamed* files):
 /// downloads live here so favorites stay playable offline and are never purged to
-/// make room. Files are the same complete MP3s the streamer plays.
+/// make room. Files are the same complete AAC (.m4a) files the streamer plays.
 final class DownloadStore {
     static let shared = DownloadStore()
 
@@ -16,10 +16,15 @@ final class DownloadStore {
                                                 in: .userDomainMask, appropriateFor: nil, create: true)
         dir = base.appendingPathComponent("Downloads", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Purge obsolete 128k MP3 downloads now that streams/downloads are AAC (.m4a);
+        // favorites re-download in the new format on demand.
+        if let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            for f in files where f.pathExtension == "mp3" { try? FileManager.default.removeItem(at: f) }
+        }
     }
 
     private func file(for songID: Int64) -> URL {
-        dir.appendingPathComponent("\(songID).mp3")
+        dir.appendingPathComponent("\(songID).m4a")
     }
 
     /// Whether a non-empty download exists for this song.
@@ -38,7 +43,7 @@ final class DownloadStore {
     func downloadedIDs() -> Set<Int64> {
         guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return [] }
         var out = Set<Int64>()
-        for f in files where f.pathExtension == "mp3" {
+        for f in files where f.pathExtension == "m4a" {
             if let id = Int64(f.deletingPathExtension().lastPathComponent) { out.insert(id) }
         }
         return out
@@ -80,7 +85,7 @@ final class DownloadStore {
     }
 
     func count() -> Int {
-        (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil).filter { $0.pathExtension == "mp3" }.count) ?? 0
+        (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil).filter { $0.pathExtension == "m4a" }.count) ?? 0
     }
 
     func clear() {

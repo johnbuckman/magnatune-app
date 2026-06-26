@@ -88,6 +88,8 @@ struct RootView: View {
                 }
             )
             .environment(\.isPhoneLayout, isCompact)
+            .environmentObject(model)
+            .environmentObject(model.audio)
         }
         .background(MacWindowConfigurator())
     }

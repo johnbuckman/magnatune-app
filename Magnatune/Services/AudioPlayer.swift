@@ -28,15 +28,34 @@ final class AudioPlayer: ObservableObject {
     @Published var shuffleEnabled: Bool = UserDefaults.standard.bool(forKey: "shuffle.enabled") {
         didSet { UserDefaults.standard.set(shuffleEnabled, forKey: "shuffle.enabled") }
     }
+    /// App-level output volume (0...1), persisted. Applied on top of the crossfade ramp.
+    @Published var volume: Float = Float(min(1.0, max(0.0, UserDefaults.standard.object(forKey: "audio.volume") as? Double ?? 1.0))) {
+        didSet {
+            UserDefaults.standard.set(Double(volume), forKey: "audio.volume")
+            if !crossfading { active.volume = volume }
+        }
+    }
 
     var current: PlayableTrack? { queue.indices.contains(index) ? queue[index] : nil }
+
+    /// Called whenever the playback state or current track changes, so the peer
+    /// service can broadcast a fresh snapshot to other Magnatune instances.
+    var onPlaybackChange: (() -> Void)?
+
+    /// Compact snapshot shared with peers (resolved against the shared catalog by song id).
+    var peerState: PeerPlaybackState { current == nil ? .idle : (isPlaying ? .playing : .paused) }
 
     private var ticker: Timer?
     private var fadeTimer: Timer?
     private var crossfading = false
     private var endObserver: NSObjectProtocol?
 
-    private let crossfadeDuration: Double = 6
+    /// User-configurable crossfade length (seconds), clamped to 1...10. Read live so a
+    /// change in Settings applies to the next crossfade without restarting.
+    private var crossfadeDuration: Double {
+        let v = UserDefaults.standard.object(forKey: "crossfade.duration") as? Double ?? 6
+        return min(10, max(1, v))
+    }
     private var hasNext: Bool { index + 1 < queue.count }
 
     private var cacheEnabled: Bool { UserDefaults.standard.object(forKey: "audio.cache.enabled") as? Bool ?? true }
@@ -96,7 +115,7 @@ final class AudioPlayer: ObservableObject {
 
     func next() {
         cancelCrossfade()
-        guard hasNext else { active.pause(); isPlaying = false; return }
+        guard hasNext else { active.pause(); isPlaying = false; onPlaybackChange?(); return }
         index += 1
         loadCurrent(autoPlay: true)
     }
@@ -118,13 +137,17 @@ final class AudioPlayer: ObservableObject {
 
     // MARK: Loading
 
-    /// Build an asset for a track, preferring the on-device cache.
-    private func makeAsset(for track: PlayableTrack) -> AVURLAsset? {
+    /// Build an asset for a track, preferring the on-device cache. Async because it may probe
+    /// the server to resolve the Lossless → Normal fallback for member streams.
+    private func makeAsset(for track: PlayableTrack) async -> AVURLAsset? {
         // Prefer a permanent download (e.g. auto-downloaded favorite) — plays offline.
         if let downloaded = DownloadStore.shared.localURL(for: track.song.id) {
             return AVURLAsset(url: downloaded)
         }
-        guard let url = URLBuilder.streamURL(for: track.song, isMember: credentials.isMember) else { return nil }
+        guard let url = await URLBuilder.resolvedStreamURL(
+            artistName: track.artistName, albumName: track.album.name, song: track.song,
+            isMember: credentials.isMember, quality: StreamQuality.current,
+            authHeader: credentials.basicAuthHeader()) else { return nil }
         if cacheEnabled, let local = AudioCache.shared.cached(for: url) {
             return AVURLAsset(url: local)
         }
@@ -137,25 +160,37 @@ final class AudioPlayer: ObservableObject {
     }
 
     private func loadCurrent(autoPlay: Bool) {
-        guard let track = current, let asset = makeAsset(for: track) else { return }
-        let item = AVPlayerItem(asset: asset)
-        active.volume = 1
-        active.replaceCurrentItem(with: item)
-        observeEnd(item: item)
-        duration = TimeInterval(track.song.duration ?? 0)
-        currentTime = 0
-        if autoPlay { active.play(); isPlaying = true }
-        userStore?.recordPlay(songID: track.song.id)
-        updateNowPlaying()
-        prefetchNext()
+        guard let track = current else { return }
+        Task { @MainActor in
+            guard let asset = await makeAsset(for: track) else { return }
+            // The user may have skipped while we were resolving/probing — ignore stale loads.
+            guard self.current?.song.id == track.song.id, !self.crossfading else { return }
+            let item = AVPlayerItem(asset: asset)
+            self.active.volume = self.volume
+            self.active.replaceCurrentItem(with: item)
+            self.observeEnd(item: item)
+            self.duration = TimeInterval(track.song.duration ?? 0)
+            self.currentTime = 0
+            if autoPlay { self.active.play(); self.isPlaying = true }
+            self.userStore?.recordPlay(songID: track.song.id)
+            self.updateNowPlaying()
+            self.prefetchNext()
+        }
     }
 
     /// Download the next track into the cache so the crossfade / next-tap is instant.
     private func prefetchNext() {
         guard cacheEnabled, hasNext else { return }
         let track = queue[index + 1]
-        guard let url = URLBuilder.streamURL(for: track.song, isMember: credentials.isMember) else { return }
-        AudioCache.shared.store(remote: url, authHeader: credentials.basicAuthHeader())
+        // Already on disk as a permanent download — no need to prefetch over the network.
+        if DownloadStore.shared.localURL(for: track.song.id) != nil { return }
+        Task { @MainActor in
+            guard let url = await URLBuilder.resolvedStreamURL(
+                artistName: track.artistName, albumName: track.album.name, song: track.song,
+                isMember: credentials.isMember, quality: StreamQuality.current,
+                authHeader: credentials.basicAuthHeader()) else { return }
+            AudioCache.shared.store(remote: url, authHeader: self.credentials.basicAuthHeader())
+        }
     }
 
     // MARK: Crossfade
@@ -163,29 +198,36 @@ final class AudioPlayer: ObservableObject {
     private func beginCrossfade() {
         guard hasNext, !crossfading else { return }
         let nextTrack = queue[index + 1]
-        guard let asset = makeAsset(for: nextTrack) else { return }
+        let startIndex = index
+        // Claim the crossfade up front so the ticker doesn't re-enter while we resolve/probe.
         crossfading = true
+        Task { @MainActor in
+            guard let asset = await makeAsset(for: nextTrack) else { self.crossfading = false; return }
+            // Bail if anything changed while resolving (skip, stop, queue change).
+            guard self.crossfading, self.index == startIndex, self.hasNext,
+                  self.queue[self.index + 1].song.id == nextTrack.song.id else { return }
 
-        let item = AVPlayerItem(asset: asset)
-        inactive.volume = 0
-        inactive.replaceCurrentItem(with: item)
-        inactive.seek(to: .zero)
-        // The upcoming track owns the end-of-track observer from here on.
-        observeEnd(item: item)
-        if isPlaying { inactive.play() }
+            let item = AVPlayerItem(asset: asset)
+            self.inactive.volume = 0
+            self.inactive.replaceCurrentItem(with: item)
+            self.inactive.seek(to: .zero, completionHandler: { _ in })
+            // The upcoming track owns the end-of-track observer from here on.
+            self.observeEnd(item: item)
+            if self.isPlaying { self.inactive.play() }
 
-        let interval = 0.05
-        let totalSteps = max(1, Int(crossfadeDuration / interval))
-        var step = 0
-        fadeTimer?.invalidate()
-        fadeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.crossfading else { return }
-                step += 1
-                let f = min(1.0, Double(step) / Double(totalSteps))
-                self.active.volume = Float(1 - f)
-                self.inactive.volume = Float(f)
-                if f >= 1.0 { self.finalizeCrossfade() }
+            let interval = 0.05
+            let totalSteps = max(1, Int(self.crossfadeDuration / interval))
+            var step = 0
+            self.fadeTimer?.invalidate()
+            self.fadeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.crossfading else { return }
+                    step += 1
+                    let f = min(1.0, Double(step) / Double(totalSteps))
+                    self.active.volume = Float(1 - f) * self.volume
+                    self.inactive.volume = Float(f) * self.volume
+                    if f >= 1.0 { self.finalizeCrossfade() }
+                }
             }
         }
     }
@@ -196,7 +238,7 @@ final class AudioPlayer: ObservableObject {
         active.replaceCurrentItem(with: nil)
         active.volume = 1
         activeIdx = 1 - activeIdx          // the faded-in player becomes active
-        active.volume = 1
+        active.volume = volume
         index += 1
         crossfading = false
         if let track = current {
@@ -213,7 +255,7 @@ final class AudioPlayer: ObservableObject {
         inactive.pause()
         inactive.replaceCurrentItem(with: nil)
         inactive.volume = 1
-        active.volume = 1
+        active.volume = volume
         crossfading = false
         // re-attach the end observer to the (still-current) active item
         if let item = active.currentItem { observeEnd(item: item) }
@@ -268,6 +310,7 @@ final class AudioPlayer: ObservableObject {
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
         ]
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        onPlaybackChange?()
 
         if let url = URLBuilder.coverURL(artistName: track.artistName, albumName: track.album.name, size: 300) {
             KingfisherManager.shared.retrieveImage(with: url) { result in

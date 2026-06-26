@@ -12,7 +12,9 @@ struct MagnatuneApp: App {
                 .environmentObject(model.credentials)
                 .environmentObject(model.audio)
                 .task {
+                    await model.credentials.refreshMembership()   // verify membership once, at launch
                     await model.refreshCatalog()
+                    await model.checkCatalogUpdate()   // auto-download a newer catalog in the background
                 }
         }
         .commands {

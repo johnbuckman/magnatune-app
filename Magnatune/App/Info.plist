@@ -42,6 +42,12 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Magnatune uses the local network to find your other Magnatune apps so you can see and control what they're playing.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_magnatune._tcp</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>

@@ -23,6 +23,55 @@ struct RoutePickerView: UIViewRepresentable {
     }
 }
 
+/// An invisible AVRoutePickerView tap target that forces the system routing popover to
+/// appear ABOVE the control (arrow pointing down). Used on the iPhone mini-player, which
+/// is docked at the bottom of the screen where there's no room for the picker to open
+/// downward. The picker presents through this controller (it's the nearest view controller
+/// in the responder chain), so overriding `present` lets us set the arrow direction.
+/// On a real iPhone the route list comes up as a bottom sheet (not a popover), so the
+/// override is a harmless no-op there.
+struct UpwardRoutePicker: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> UpwardRoutePickerController { UpwardRoutePickerController() }
+    func updateUIViewController(_ vc: UpwardRoutePickerController, context: Context) {}
+}
+
+final class UpwardRoutePickerController: UIViewController {
+    private let picker = AVRoutePickerView()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        picker.prioritizesVideoDevices = false
+        picker.backgroundColor = .clear
+        picker.activeTintColor = .clear     // invisible — the SwiftUI glyph is the visible icon
+        picker.tintColor = .clear
+        view.addSubview(picker)
+        NSLayoutConstraint.activate([
+            picker.topAnchor.constraint(equalTo: view.topAnchor),
+            picker.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            picker.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            picker.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+    }
+
+    override func present(_ vc: UIViewController, animated: Bool, completion: (() -> Void)? = nil) {
+        if vc.modalPresentationStyle == .popover {
+            vc.popoverPresentationController?.permittedArrowDirections = .down
+        }
+        super.present(vc, animated: animated, completion: completion)
+    }
+}
+
+/// A peer's playback position for display, interpolated locally between the ~4s heartbeats
+/// (advances only while the peer is actually playing).
+func remoteDisplayPosition(_ peer: Peer, duration: Double) -> Double {
+    var pos = peer.nowPlaying.position
+    if peer.nowPlaying.state == .playing { pos += Date().timeIntervalSince(peer.lastActiveAt) }
+    if duration > 0 { pos = min(pos, duration) }
+    return max(0, pos)
+}
+
 /// Progress/seek bar that supports both tapping (jump to point) and dragging (scrub).
 struct SeekBar: View {
     let current: Double
@@ -61,39 +110,48 @@ struct SeekBar: View {
 
 struct MiniPlayer: View {
     @EnvironmentObject var audio: AudioPlayer
+    @EnvironmentObject var model: AppModel
     @Environment(\.isPhoneLayout) private var isPhone
+    @State private var showVolumePopover = false
     var onExpand: () -> Void
 
-    private var hasTrack: Bool { audio.current != nil }
+    /// The peer we're controlling, if local audio is idle and a peer is active.
+    private var remote: Peer? { model.remoteFocus }
+    /// The track shown in the player — remote peer's track when controlling, else our own.
+    private var displayTrack: PlayableTrack? {
+        if let remote, let id = remote.nowPlaying.songID { return model.playableTrack(songID: id) }
+        return audio.current
+    }
+    private var hasTrack: Bool { displayTrack != nil }
+    private var isRemotePlaying: Bool { remote?.nowPlaying.state == .playing }
 
     var body: some View {
-        // Always visible. When nothing is playing it shows an idle placeholder
-        // (disabled transport + empty seek bar) rather than disappearing.
+        // Always visible. When nothing is playing locally and a peer is active, it shows
+        // that peer's track + a "Controlling …" banner; otherwise our own playback (or an
+        // idle placeholder).
         VStack(spacing: 4) {
+            if let remote { remoteBanner(remote) }
             HStack(spacing: 12) {
-                artwork
+                artwork(displayTrack)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(audio.current?.song.name ?? "Not Playing")
+                    Text(displayTrack?.song.name ?? "Not Playing")
                         .font(.callout).lineLimit(1)
                         .foregroundStyle(hasTrack ? .primary : .secondary)
-                    Text(audio.current?.artistName ?? "Magnatune")
+                    Text(displayTrack?.artistName ?? "Magnatune")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
-                airplayPill
-                transportButton("backward.fill") { audio.previous() }.disabled(!hasTrack)
-                transportButton(audio.isPlaying ? "pause.fill" : "play.fill") { audio.toggle() }.disabled(!hasTrack)
-                transportButton("forward.fill") { audio.next() }.disabled(!hasTrack)
+                if !isPhone && remote == nil { volumeControl }
+                if isPhone && remote == nil { volumeButton }
+                if remote == nil { airplayPill }
+                transportButton("backward.fill") { transport(.prev) }.disabled(!hasTrack)
+                transportButton(playPauseIcon) { transport(.playPause) }.disabled(!hasTrack)
+                transportButton("forward.fill") { transport(.next) }.disabled(!hasTrack)
             }
             .contentShape(Rectangle())
             .onTapGesture { if hasTrack { onExpand() } }
 
-            HStack(spacing: 8) {
-                Text(timeText(audio.currentTime)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                SeekBar(current: audio.currentTime, duration: audio.duration) { audio.seek(to: $0) }
-                    .disabled(!hasTrack)
-                Text(timeText(audio.duration)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-            }
+            progressRow
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
@@ -102,15 +160,102 @@ struct MiniPlayer: View {
         .padding(.horizontal, 10).padding(.bottom, 10).padding(.top, 2)
     }
 
-    @ViewBuilder private var artwork: some View {
+    private var playPauseIcon: String {
+        if remote != nil { return isRemotePlaying ? "pause.fill" : "play.fill" }
+        return audio.isPlaying ? "pause.fill" : "play.fill"
+    }
+
+    /// Route a transport tap to the controlled peer, or to our own player.
+    private func transport(_ cmd: PeerControl) {
+        if let remote {
+            model.peerService.sendControl(peerID: remote.id, cmd)
+        } else {
+            switch cmd {
+            case .prev: audio.previous()
+            case .playPause: audio.toggle()
+            case .next: audio.next()
+            }
+        }
+    }
+
+    @ViewBuilder private func remoteBanner(_ peer: Peer) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "dot.radiowaves.left.and.right")
+            Text("Controlling \(peer.name)").lineLimit(1)
+            Spacer()
+        }
+        .font(.caption2.bold())
+        .foregroundStyle(Color.accentColor)
+    }
+
+    @ViewBuilder private var progressRow: some View {
+        if let remote {
+            // Read-only remote scrubber; interpolate position locally between heartbeats.
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                let dur = Double(displayTrack?.song.duration ?? 0)
+                let pos = remoteDisplayPosition(remote, duration: dur)
+                HStack(spacing: 8) {
+                    Text(timeText(pos)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    SeekBar(current: pos, duration: dur) { _ in }.disabled(true)
+                    Text(timeText(dur)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Text(timeText(audio.currentTime)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                SeekBar(current: audio.currentTime, duration: audio.duration) { audio.seek(to: $0) }
+                    .disabled(!hasTrack)
+                Text(timeText(audio.duration)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private func artwork(_ track: PlayableTrack?) -> some View {
         let dim = coverDim(44, phone: isPhone)
-        if let track = audio.current {
+        if let track {
             CoverImage(artistName: track.artistName, albumName: track.album.name, points: 44)
                 .frame(width: dim, height: dim)
         } else {
             RoundedRectangle(cornerRadius: 6).fill(.quaternary)
                 .frame(width: dim, height: dim)
                 .overlay(Image(systemName: "music.note").foregroundStyle(.secondary))
+        }
+    }
+
+    /// Output-volume slider — shown only on large screens (iPad/Mac), left of AirPlay.
+    @ViewBuilder private var volumeControl: some View {
+        HStack(spacing: 6) {
+            Image(systemName: volumeIcon)
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(width: 16)
+            Slider(value: $audio.volume, in: 0...1)
+                .frame(width: 84)
+        }
+    }
+
+    private var volumeIcon: String {
+        switch audio.volume {
+        case ..<0.01: return "speaker.slash.fill"
+        case ..<0.5:  return "speaker.wave.1.fill"
+        default:      return "speaker.wave.2.fill"
+        }
+    }
+
+    /// iPhone: a volume icon that opens a vertical slider popover above the tap point.
+    @ViewBuilder private var volumeButton: some View {
+        Button { showVolumePopover = true } label: {
+            Image(systemName: volumeIcon)
+                .font(.subheadline).foregroundStyle(.secondary)
+                .frame(width: 30, height: 28).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showVolumePopover) {
+            Slider(value: $audio.volume, in: 0...1)
+                .frame(width: 150)
+                .rotationEffect(.degrees(-90))
+                .frame(width: 44, height: 150)
+                .padding(.vertical, 16).padding(.horizontal, 10)
+                .presentationCompactAdaptation(.popover)
         }
     }
 
@@ -122,7 +267,7 @@ struct MiniPlayer: View {
                 .foregroundStyle(audio.isExternalRoute ? Color.accentColor : .secondary)
                 .frame(width: 30, height: 28)
                 .contentShape(Rectangle())
-                .overlay(RoutePickerView(visible: false))
+                .overlay(UpwardRoutePicker())   // opens the route picker ABOVE the tap
         } else {
             HStack(spacing: 4) {
                 Image(systemName: "airplayaudio")
@@ -160,6 +305,7 @@ struct MiniPlayer: View {
 
 struct NowPlayingView: View {
     @EnvironmentObject var audio: AudioPlayer
+    @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.isPhoneLayout) private var isPhone
     /// Tapping the artwork / song / album opens the album page; the artist name opens
@@ -167,57 +313,133 @@ struct NowPlayingView: View {
     var onOpenAlbum: (Album) -> Void = { _ in }
     var onOpenArtist: (Album) -> Void = { _ in }
 
+    private var remote: Peer? { model.remoteFocus }
+    private var displayTrack: PlayableTrack? {
+        if let remote, let id = remote.nowPlaying.songID { return model.playableTrack(songID: id) }
+        return audio.current
+    }
+    private var isRemotePlaying: Bool { remote?.nowPlaying.state == .playing }
+
     var body: some View {
-        VStack(spacing: 24) {
-            if let track = audio.current {
-                Capsule().fill(.secondary).frame(width: 40, height: 5).padding(.top, 8)
-                Spacer()
-                CoverImage(artistName: track.artistName, albumName: track.album.name, points: 360, corner: 12)
-                    .frame(maxWidth: coverDim(360, phone: isPhone), maxHeight: coverDim(360, phone: isPhone))
-                    .shadow(radius: 12)
-                    .contentShape(Rectangle())
-                    .onTapGesture { onOpenAlbum(track.album) }
-                VStack(spacing: 4) {
-                    Text(track.song.name).font(.title2.bold()).multilineTextAlignment(.center)
+        GeometryReader { geo in
+            // Size the artwork to the available height so the controls always fit
+            // (no bottom truncation) and the block stays vertically centered.
+            let side = max(120, min(geo.size.width - 64, geo.size.height * 0.46))
+            VStack(spacing: 16) {
+                // Tap the grab handle (or the close button) to hide the player — on Mac
+                // there's no swipe-to-dismiss.
+                Button { dismiss() } label: {
+                    Capsule().fill(.secondary).frame(width: 44, height: 5)
+                        .padding(.top, 10).padding(.bottom, 4).padding(.horizontal, 40)
                         .contentShape(Rectangle())
-                        .onTapGesture { onOpenAlbum(track.album) }
-                    Text(track.artistName).font(.title3).foregroundStyle(.secondary)
-                        .contentShape(Rectangle())
-                        .onTapGesture { onOpenArtist(track.album) }
-                    Text(track.album.name).font(.callout).foregroundStyle(.secondary)
-                        .contentShape(Rectangle())
-                        .onTapGesture { onOpenAlbum(track.album) }
                 }
-                progressBar
-                controls
-                Spacer()
-            } else {
-                ContentUnavailableView("Nothing Playing", systemImage: "music.note")
+                .buttonStyle(.plain)
+                .help("Hide player")
+                if let remote { remoteBanner(remote) }
+                if let track = displayTrack {
+                    Spacer(minLength: 0)
+                    CoverImage(artistName: track.artistName, albumName: track.album.name, points: 360, corner: 12)
+                        .frame(width: side, height: side)
+                        .shadow(radius: 12)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onOpenAlbum(track.album) }
+                    VStack(spacing: 4) {
+                        Text(track.song.name).font(.title2.bold()).multilineTextAlignment(.center).lineLimit(2)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onOpenAlbum(track.album) }
+                        Text(track.artistName).font(.title3).foregroundStyle(.secondary)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onOpenArtist(track.album) }
+                        Text(track.album.name).font(.callout).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onOpenAlbum(track.album) }
+                    }
+                    progressBar(track: track)
+                    controls
+                    Spacer(minLength: 0)
+                } else {
+                    Spacer()
+                    ContentUnavailableView("Nothing Playing", systemImage: "music.note")
+                    Spacer()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 32)
+            .padding(.bottom, isPhone ? 28 : 24)
+            .overlay(alignment: .topTrailing) {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.down.circle.fill")
+                        .font(.title2)
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                        .padding(12)
+                }
+                .buttonStyle(.plain)
+                .help("Hide player")
             }
         }
-        .padding(.horizontal, 32)
-        .padding(.bottom, isPhone ? 28 : 0)   // keep the controls clear of the bottom edge on iPhone
-        .frame(minWidth: 380, minHeight: 560)
+        .frame(minWidth: 380, idealWidth: isPhone ? 380 : 460,
+               minHeight: 560, idealHeight: isPhone ? 600 : 680)
     }
 
-    private var progressBar: some View {
-        VStack(spacing: 4) {
-            SeekBar(current: audio.currentTime, duration: audio.duration) { audio.seek(to: $0) }
-            HStack {
-                Text(timeText(audio.currentTime)).font(.caption.monospacedDigit())
-                Spacer()
-                Text(timeText(audio.duration)).font(.caption.monospacedDigit())
-            }.foregroundStyle(.secondary)
+    @ViewBuilder private func remoteBanner(_ peer: Peer) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "dot.radiowaves.left.and.right")
+            Text("Controlling \(peer.name)")
+        }
+        .font(.subheadline.bold())
+        .foregroundStyle(Color.accentColor)
+        .padding(.horizontal, 12).padding(.vertical, 5)
+        .background(Color.accentColor.opacity(0.12), in: Capsule())
+    }
+
+    @ViewBuilder private func progressBar(track: PlayableTrack) -> some View {
+        if let remote {
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                let dur = Double(track.song.duration ?? 0)
+                let pos = remoteDisplayPosition(remote, duration: dur)
+                VStack(spacing: 4) {
+                    SeekBar(current: pos, duration: dur) { _ in }.disabled(true)
+                    HStack {
+                        Text(timeText(pos)).font(.caption.monospacedDigit())
+                        Spacer()
+                        Text(timeText(dur)).font(.caption.monospacedDigit())
+                    }.foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            VStack(spacing: 4) {
+                SeekBar(current: audio.currentTime, duration: audio.duration) { audio.seek(to: $0) }
+                HStack {
+                    Text(timeText(audio.currentTime)).font(.caption.monospacedDigit())
+                    Spacer()
+                    Text(timeText(audio.duration)).font(.caption.monospacedDigit())
+                }.foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func transport(_ cmd: PeerControl) {
+        if let remote {
+            model.peerService.sendControl(peerID: remote.id, cmd)
+        } else {
+            switch cmd {
+            case .prev: audio.previous()
+            case .playPause: audio.toggle()
+            case .next: audio.next()
+            }
         }
     }
 
     private var controls: some View {
         HStack(spacing: 44) {
-            Button { audio.previous() } label: { Image(systemName: "backward.fill").font(.title) }
-            Button { audio.toggle() } label: {
-                Image(systemName: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 64))
+            Button { transport(.prev) } label: { Image(systemName: "backward.fill").font(.title) }
+            Button { transport(.playPause) } label: {
+                let playing = remote != nil ? isRemotePlaying : audio.isPlaying
+                Image(systemName: playing ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 64))
             }
-            Button { audio.next() } label: { Image(systemName: "forward.fill").font(.title) }
+            Button { transport(.next) } label: { Image(systemName: "forward.fill").font(.title) }
         }
         .buttonStyle(.plain)
     }
