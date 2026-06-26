@@ -14,7 +14,7 @@ struct ArtistDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 16) {
-                    ArtistPhoto(artist: artist)
+                    ArtistPhoto(artist: artist, points: 120)
                         .frame(width: 120, height: 120).clipShape(Circle())
                         .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
                         .onTapGesture { showPhoto = true }
@@ -54,7 +54,12 @@ struct ArtistDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .fullScreenCover(isPresented: $showPhoto) {
-            FullScreenImage(url: URLBuilder.artistPhotoURL(artist))
+            // Sized thumbnail (artist_840, a few KB) with a smaller one shown instantly;
+            // falls back to the full-resolution original if the artist has no album.
+            FullScreenImage(
+                url: albums.first.flatMap { URLBuilder.artistPhotoURL(artistName: artist.name, albumName: $0.name, size: 840) }
+                    ?? URLBuilder.artistPhotoURL(artist),
+                placeholderURL: albums.first.flatMap { URLBuilder.artistPhotoURL(artistName: artist.name, albumName: $0.name, size: 200) })
         }
         .task {
             albums = model.catalog?.albums(forArtist: artist.id) ?? []

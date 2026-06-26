@@ -114,7 +114,7 @@ struct FavoritesView: View {
                             ForEach(vArtists) { a in
                                 NavigationLink(value: a) {
                                     HStack {
-                                        ArtistPhoto(artist: a).frame(width: 36, height: 36).clipShape(Circle())
+                                        ArtistPhoto(artist: a, points: 36).frame(width: 36, height: 36).clipShape(Circle())
                                     .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
                                         Text(a.name)
                                         Spacer()

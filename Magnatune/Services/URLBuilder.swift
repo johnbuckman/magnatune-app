@@ -74,13 +74,24 @@ enum URLBuilder {
 
     // MARK: Cover art
 
-    /// Sizes available: 50, 100, 200, 300, 600, 1400.
+    /// Album cover thumbnails Magnatune generates as cover_<N>.jpg.
+    /// Sizes available: 50, 75, 100, 150, 200, 300, 400, 600, 800, 1400.
     static func coverURL(artistName: String, albumName: String, size: Int) -> URL? {
         url(host: he3, path: "/music/\(artistName)/\(albumName)/cover_\(size).jpg")
     }
 
     // MARK: Artist photo
 
+    /// Sized artist thumbnails (artist_<N>.jpg: 50, 200, 420, 840) that Magnatune
+    /// generates into EACH of an artist's album directories. These are tiny (a few KB)
+    /// versus the full-resolution original at `artists.photo` (which can be several MB),
+    /// so they're the preferred source whenever any album name for the artist is known.
+    static func artistPhotoURL(artistName: String, albumName: String, size: Int) -> URL? {
+        url(host: he3, path: "/music/\(artistName)/\(albumName)/artist_\(size).jpg")
+    }
+
+    /// The single full-resolution original from `artists.photo`. Large; used only as a
+    /// fallback when the artist has no album to source a sized thumbnail from.
     static func artistPhotoURL(_ artist: Artist) -> URL? {
         guard let p = artist.photo, !p.isEmpty else { return nil }
         return url(host: he3, path: p)

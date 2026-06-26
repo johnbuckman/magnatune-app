@@ -52,6 +52,17 @@ final class CatalogStore {
         } ?? []
     }
 
+    /// One representative album name for an artist (most popular), used to build the
+    /// sized artist-photo URL — those thumbnails live in the album directories.
+    /// nil if the artist has no albums.
+    func firstAlbumName(forArtist artistId: Int64) -> String? {
+        read {
+            try String.fetchOne($0,
+                sql: "SELECT name FROM albums WHERE artist_id = ? ORDER BY popularity DESC, release_date DESC LIMIT 1",
+                arguments: [artistId])
+        } ?? nil
+    }
+
     func newReleases(limit: Int = 40) -> [Album] {
         read {
             try Album.order(sql: "release_date DESC").limit(limit).fetchAll($0)

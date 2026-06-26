@@ -48,8 +48,9 @@ struct CoverImage: View {
     var corner: CGFloat = 6
 
     // Available cover_N.jpg sizes; inline use is capped at 600 (1400 is reserved
-    // for the full-screen viewer) so we never over-fetch.
-    private static let tiers = [50, 100, 200, 300, 600]
+    // for the full-screen viewer) so we never over-fetch. The finer tiers let small
+    // displays (mini-player, rows) fetch a smaller file.
+    private static let tiers = [50, 75, 100, 150, 200, 300, 400, 600]
 
     private var pixelSize: Int {
         let needed = points * displayScale
@@ -74,9 +75,32 @@ struct CoverImage: View {
 }
 
 struct ArtistPhoto: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.displayScale) private var displayScale
     let artist: Artist
+    /// Display dimension in points; the smallest artist tier covering points × scale
+    /// is fetched from one of the artist's album directories.
+    var points: CGFloat = 80
+
+    // Sized artist_N.jpg thumbnails available on the server.
+    private static let tiers = [50, 200, 420, 840]
+
+    private var pixelSize: Int {
+        let needed = points * displayScale
+        return ArtistPhoto.tiers.first { CGFloat($0) >= needed } ?? ArtistPhoto.tiers.last!
+    }
+
+    private var url: URL? {
+        // Prefer the tiny sized thumbnail (lives in an album dir); fall back to the
+        // full-resolution original only when the artist has no album to source it from.
+        if let album = model.catalog?.firstAlbumName(forArtist: artist.id) {
+            return URLBuilder.artistPhotoURL(artistName: artist.name, albumName: album, size: pixelSize)
+        }
+        return URLBuilder.artistPhotoURL(artist)
+    }
+
     var body: some View {
-        KFImage(URLBuilder.artistPhotoURL(artist))
+        KFImage(url)
             .resizable()
             .placeholder {
                 Circle().fill(.quaternary)

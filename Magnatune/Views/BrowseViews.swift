@@ -64,7 +64,7 @@ struct ArtistsView: View {
             List(filtered) { artist in
                 NavigationLink(value: artist) {
                     HStack(spacing: 12) {
-                        ArtistPhoto(artist: artist).frame(width: 44, height: 44).clipShape(Circle())
+                        ArtistPhoto(artist: artist, points: 44).frame(width: 44, height: 44).clipShape(Circle())
                             .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
                         Text(artist.name)
                         Spacer()
@@ -209,7 +209,7 @@ struct GenreArtistsView: View {
         List(model.visibleArtists(artists)) { artist in
             NavigationLink(value: artist) {
                 HStack(spacing: 12) {
-                    ArtistPhoto(artist: artist).frame(width: 40, height: 40).clipShape(Circle())
+                    ArtistPhoto(artist: artist, points: 40).frame(width: 40, height: 40).clipShape(Circle())
                         .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
                     Text(artist.name)
                     Spacer()
