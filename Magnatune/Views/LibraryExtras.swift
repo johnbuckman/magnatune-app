@@ -9,57 +9,89 @@ struct SearchView: View {
     @State private var albums: [Album] = []
     @State private var songs: [PlayableTrack] = []
     @State private var names: [Int64: String] = [:]
+    @FocusState private var searchFocused: Bool
+    /// Shared row insets so all three result types line their artwork up identically.
+    private let rowInsets = EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16)
 
     var body: some View {
         let vArtists = model.visibleArtists(artists)
         let vAlbums = model.visibleAlbums(albums)
         let vSongs = model.visibleTracks(songs)
         let hasResults = !vArtists.isEmpty || !vAlbums.isEmpty || !vSongs.isEmpty
-        Group {
+        // Keep `searchInput` at a STABLE position in the view tree (always the first child)
+        // so a new result set never recreates the field — recreating it dropped keyboard
+        // focus mid-typing.
+        VStack(spacing: 0) {
+            searchInput.padding(.vertical, 12)
             if hasResults {
-                VStack(spacing: 0) {
-                    searchInput.padding(.vertical, 12)
-                    List {
-                        if !vArtists.isEmpty {
-                            Section("Artists") {
-                                ForEach(vArtists) { a in
-                                    NavigationLink(value: a) { Label(a.name, systemImage: "person") }
-                                }
-                            }
-                        }
-                        if !vAlbums.isEmpty {
-                            Section("Albums") {
-                                ForEach(vAlbums) { al in
-                                    NavigationLink(value: al) {
-                                        Text("\(al.name) — \(names[al.artistId] ?? "")")
+                List {
+                    if !vArtists.isEmpty {
+                        Section("Artists") {
+                            ForEach(vArtists) { a in
+                                NavigationLink(value: a) {
+                                    HStack(spacing: 12) {
+                                        ArtistPhoto(artist: a, points: 40)
+                                            .frame(width: 40, height: 40).clipShape(Circle())
+                                        Text(a.name)
                                     }
                                 }
+                                .listRowInsets(rowInsets)
                             }
                         }
-                        if !vSongs.isEmpty {
-                            Section("Songs") {
-                                ForEach(Array(vSongs.enumerated()), id: \.element.id) { idx, t in
-                                    SongRow(track: t, showArtwork: true) { model.audio.play(tracks: vSongs, startAt: idx) }
+                    }
+                    if !vAlbums.isEmpty {
+                        Section("Albums") {
+                            ForEach(vAlbums) { al in
+                                // Album name + cover link to the album; the artist is a chip
+                                // linking to the artist (web parity).
+                                HStack(spacing: 12) {
+                                    NavigationLink(value: al) {
+                                        HStack(spacing: 12) {
+                                            CoverImage(artistName: names[al.artistId] ?? "", albumName: al.name, points: 40)
+                                                .frame(width: 40, height: 40)
+                                            Text(al.name).lineLimit(1)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    if let artist = model.catalog?.artist(id: al.artistId) {
+                                        NavigationLink(value: artist) {
+                                            Label(artist.name, systemImage: "person")
+                                                .font(.caption).lineLimit(1)
+                                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    Spacer(minLength: 0)
                                 }
+                                .listRowInsets(rowInsets)
+                            }
+                        }
+                    }
+                    if !vSongs.isEmpty {
+                        Section("Songs") {
+                            ForEach(Array(vSongs.enumerated()), id: \.element.id) { idx, t in
+                                SongRow(track: t, showArtwork: true, hPad: 0) { model.audio.play(tracks: vSongs, startAt: idx) }
+                                    .listRowInsets(rowInsets)
                             }
                         }
                     }
                 }
             } else {
-                // Nothing yet: search box vertically centered with a label above it.
-                VStack(spacing: 16) {
-                    Spacer()
-                    searchInput
-                    if query.count >= 2 {
-                        ContentUnavailableView.search(text: query)
-                    }
-                    Spacer()
-                }
-                .padding()
+                Spacer()
+                if query.count >= 2 { ContentUnavailableView.search(text: query) }
+                Spacer()
             }
         }
         .onChange(of: query) { _, q in search(q) }
         .navigationTitle("Search")
+        .task {
+            // Auto-focus the search field when the Search section opens so you can type
+            // right away. Brief delay so the field is laid out first.
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            searchFocused = true
+        }
     }
 
     /// Centered label + constrained search field, used at the top (with results) or
@@ -68,7 +100,7 @@ struct SearchView: View {
         VStack(spacing: 10) {
             Text("Search Magnatune")
                 .font(.title2.bold())
-            SearchField(text: $query, prompt: "Artists, albums, songs")
+            SearchField(text: $query, prompt: "Artists, albums, songs", focused: $searchFocused)
                 .frame(maxWidth: 460)
         }
         .frame(maxWidth: .infinity)
@@ -209,7 +241,11 @@ struct PlaylistsView: View {
             } else {
                 List {
                     ForEach(rows) { pl in
-                        NavigationLink { PlaylistDetailView(playlistID: pl.id, name: pl.name) } label: {
+                        // Value-based link so the detail lives on the shared NavigationPath —
+                        // otherwise a destination-based link pushes outside `path`, and the
+                        // sidebar's `path = NavigationPath()` can't pop it (Popular et al.
+                        // appear to "do nothing" while a playlist is open).
+                        NavigationLink(value: UserPlaylistRef(id: pl.id, name: pl.name)) {
                             HStack { Label(pl.name, systemImage: "music.note.list"); Spacer(); Text("\(pl.count)").foregroundStyle(.secondary) }
                         }
                     }
@@ -234,6 +270,9 @@ struct PlaylistsView: View {
 
     private func reload() { rows = user.playlists() }
 }
+
+/// Hashable reference to a user playlist, pushed onto the shared NavigationPath.
+struct UserPlaylistRef: Hashable { let id: Int64; let name: String }
 
 struct PlaylistDetailView: View {
     @EnvironmentObject var model: AppModel

@@ -222,14 +222,13 @@ struct FullScreenImage: View {
 struct SearchField: View {
     @Binding var text: String
     var prompt: String
+    /// Optional external focus binding so a parent can auto-focus the field.
+    var focused: FocusState<Bool>.Binding? = nil
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(prompt, text: $text)
-                .textFieldStyle(.plain)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
+            field
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -241,6 +240,14 @@ struct SearchField: View {
         .padding(.horizontal).padding(.top, 8).padding(.bottom, 10)
         .frame(maxWidth: .infinity)
         .background(Color(.systemBackground))
+    }
+
+    @ViewBuilder private var field: some View {
+        let base = TextField(prompt, text: $text)
+            .textFieldStyle(.plain)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+        if let focused { base.focused(focused) } else { base }
     }
 }
 
@@ -261,7 +268,7 @@ struct FavoriteButton: View {
                     .resizable()
                     .renderingMode(.template)
                     .scaledToFit()
-                    .foregroundStyle(on ? .pink : .secondary)
+                    .foregroundStyle(on ? Color.pink : Color.secondary)
                     .frame(width: 20, height: 16)
             }
             .buttonStyle(.borderless)
@@ -289,7 +296,7 @@ struct DislikeButton: View {
                 .resizable()
                 .renderingMode(.template)
                 .scaledToFit()
-                .foregroundStyle(disliked ? Color(red: 0.72, green: 0.25, blue: 0.27) : .secondary)
+                .foregroundStyle(disliked ? Color(red: 0.72, green: 0.25, blue: 0.27) : Color.secondary)
                 .frame(width: 20, height: 16)
         }
         .buttonStyle(.borderless)
@@ -300,14 +307,68 @@ struct DislikeButton: View {
 /// Button (shown beside the heart) that opens an "Add to Playlist" sheet for the
 /// given songs. `songIDs` is resolved lazily when tapped.
 struct AddToPlaylistButton: View {
+    @EnvironmentObject var user: UserStore
     let songIDs: () -> [Int64]
     @State private var show = false
     var body: some View {
-        Button { show = true } label: {
-            Image(systemName: "text.badge.plus").foregroundStyle(.secondary)
+        // Add/remove toggle: the minus variant (already on a playlist) removes the songs
+        // from all playlists; the plus variant opens the add sheet.
+        let ids = songIDs()
+        let onPlaylist = ids.contains { user.isOnAnyPlaylist($0) }
+        Button {
+            if onPlaylist { user.removeSongsFromAllPlaylists(ids) }
+            else { show = true }
+        } label: {
+            Image(onPlaylist ? "PlaylistMinus" : "PlaylistPlus")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .foregroundStyle(Color.secondary)
+                .frame(width: 21, height: 18)
         }
         .buttonStyle(.borderless)
-        .sheet(isPresented: $show) { AddToPlaylistSheet(songIDs: songIDs()) }
+        .help(onPlaylist ? "Remove from playlist" : "Add to playlist")
+        .sheet(isPresented: $show) { AddToPlaylistSheet(songIDs: ids) }
+    }
+}
+
+/// Member-only download control. Opens the system browser to download the media in the
+/// format chosen in Settings. Renders nothing for non-members.
+struct AlbumDownloadButton: View {
+    @EnvironmentObject var credentials: Credentials
+    @Environment(\.openURL) private var openURL
+    let sku: String
+    @AppStorage("download.album.format") private var format = "vbr"
+    var body: some View {
+        if credentials.isMember, !sku.isEmpty {
+            Button {
+                if let url = URLBuilder.albumMembershipDownloadURL(sku: sku, format: format) { openURL(url) }
+            } label: {
+                Image("Download").resizable().renderingMode(.template).scaledToFit()
+                    .foregroundStyle(Color.secondary).frame(width: 22, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .help("Download album")
+        }
+    }
+}
+
+struct SongDownloadButton: View {
+    @EnvironmentObject var credentials: Credentials
+    @Environment(\.openURL) private var openURL
+    let track: PlayableTrack
+    @AppStorage("download.song.format") private var format = "mp3"
+    var body: some View {
+        if credentials.isMember {
+            Button {
+                if let url = URLBuilder.songDownloadURL(artistName: track.artistName, albumName: track.album.name, song: track.song, ext: format) { openURL(url) }
+            } label: {
+                Image("Download").resizable().renderingMode(.template).scaledToFit()
+                    .foregroundStyle(Color.secondary).frame(width: 19, height: 17)
+            }
+            .buttonStyle(.borderless)
+            .help("Download song")
+        }
     }
 }
 
@@ -317,6 +378,7 @@ struct AddToPlaylistSheet: View {
     let songIDs: [Int64]
     @State private var newName = ""
     @State private var rows: [UserStore.PlaylistRow] = []
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -324,6 +386,7 @@ struct AddToPlaylistSheet: View {
                 Section("Create playlist:") {
                     HStack {
                         TextField("New playlist name", text: $newName)
+                            .focused($nameFocused)
                             .textInputAutocapitalization(.words)
                         Button("Create") {
                             let id = user.createPlaylist(name: newName.trimmingCharacters(in: .whitespaces))
@@ -352,7 +415,13 @@ struct AddToPlaylistSheet: View {
             .navigationTitle(songIDs.count == 1 ? "Add to Playlist" : "Add \(songIDs.count) Songs")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .task { rows = user.playlists() }
+            .task {
+                rows = user.playlists()
+                // Brief delay so the sheet is fully presented before we focus (otherwise
+                // the focus/keyboard doesn't reliably take on first appearance).
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                nameFocused = true
+            }
         }
         .presentationDetents([.medium, .large])
     }
@@ -371,6 +440,7 @@ struct SongRow: View {
     @Environment(\.isPhoneLayout) private var isPhone
     let track: PlayableTrack
     var showArtwork = false
+    var hPad: CGFloat = 6     // horizontal inset (0 in search so artwork aligns with the list rows)
     var onPlay: () -> Void
 
     private var isCurrent: Bool { audio.current?.id == track.id }
@@ -389,9 +459,10 @@ struct SongRow: View {
             Spacer()
             Text(track.song.durationText).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             FavoriteButton(kind: "song", id: track.song.id)
+            SongDownloadButton(track: track)
             AddToPlaylistButton { [track.song.id] }
         }
-        .padding(.vertical, 3).padding(.horizontal, 6)
+        .padding(.vertical, 3).padding(.horizontal, hPad)
         .background(RoundedRectangle(cornerRadius: 6).fill(isCurrent ? Color.accentColor.opacity(0.12) : .clear))
         .contentShape(Rectangle())
         .onTapGesture(perform: onPlay)

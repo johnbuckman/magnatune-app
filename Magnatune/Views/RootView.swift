@@ -121,6 +121,7 @@ struct RootView: View {
                 .navigationDestination(for: Genre.self) { GenreArtistsView(genre: $0).onAppear { highlight(.genres) } }
                 .navigationDestination(for: Tag.self) { TagAlbumsView(tag: $0).onAppear { highlight(.tags) } }
                 .navigationDestination(for: CatalogPlaylist.self) { CatalogPlaylistDetailView(playlist: $0).onAppear { highlight(nil) } }
+                .navigationDestination(for: UserPlaylistRef.self) { PlaylistDetailView(playlistID: $0.id, name: $0.name).onAppear { highlight(.myPlaylists) } }
         }
         // Hide the default grouped List background so List pages match the ScrollView pages.
         .scrollContentBackground(.hidden)

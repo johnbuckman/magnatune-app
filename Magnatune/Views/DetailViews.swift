@@ -118,16 +118,13 @@ struct AlbumDetailView: View {
                             Button {
                                 audio.shuffleEnabled.toggle()   // on/off mode, doesn't start playback
                             } label: {
-                                Image(audio.shuffleEnabled ? "ShufOn" : "ShufOff")
-                                    .resizable()
-                                    .renderingMode(.template)
-                                    .scaledToFit()
-                                    .frame(width: 22, height: 21)
+                                Image(systemName: "shuffle")
                             }
                                 .buttonStyle(.bordered)
                                 .tint(audio.shuffleEnabled ? Color.accentColor : .secondary)
                                 .help(audio.shuffleEnabled ? "Shuffle on" : "Shuffle off")
                             FavoriteButton(kind: "album", id: album.id)
+                            AlbumDownloadButton(sku: album.sku)
                             AddToPlaylistButton { shown.map { $0.song.id } }
                         }
                     }

@@ -20,6 +20,10 @@ struct SettingsView: View {
     @AppStorage("crossfade.enabled") private var crossfadeEnabled = true
     @AppStorage("crossfade.duration") private var crossfadeDuration = 6.0
     @AppStorage(StreamQuality.defaultsKey) private var streamQualityRaw = StreamQuality.normal.rawValue
+    @AppStorage("download.album.format") private var dlAlbumFormat = "vbr"
+    @AppStorage("download.song.format") private var dlSongFormat = "mp3"
+    private let albumDownloadFormats: [(String, String)] = [("vbr", "MP3 — high quality VBR (~88MB)"), ("mp3", "MP3 — 128k (smaller)"), ("aac", "AAC — for iTunes / iPod"), ("alac", "ALAC — Apple Lossless"), ("flac", "FLAC — lossless, open"), ("ogg", "OGG — high quality, open"), ("wav", "WAV — lossless, exact copy")]
+    private let songDownloadFormats: [(String, String)] = [("mp3", "MP3 — high quality"), ("ogg", "OGG"), ("flac", "FLAC — lossless"), ("wav", "WAV — lossless")]
 
     enum SignInResult { case success, failure }
 
@@ -98,6 +102,21 @@ struct SettingsView: View {
             }
 
             groupDivider
+
+            if creds.isMember {
+                Section {
+                    Picker("Album", selection: $dlAlbumFormat) {
+                        ForEach(albumDownloadFormats, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    Picker("Songs", selection: $dlSongFormat) {
+                        ForEach(songDownloadFormats, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                } header: { Text("Download formats") } footer: {
+                    Text("The format used when you tap the download button on an album or a single song. Downloads open in your browser.")
+                }
+
+                groupDivider
+            }
 
             Section {
                 Toggle("Auto-download favorites", isOn: Binding(

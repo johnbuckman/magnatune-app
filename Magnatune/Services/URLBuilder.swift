@@ -116,6 +116,22 @@ enum URLBuilder {
         url(host: download, path: "/music/\(artistName)/\(albumName)/\(sku)-\(format.rawValue).zip")
     }
 
+    /// Whole-album download via the magnatune membership endpoint (opens in a browser, which
+    /// handles the member login). format ∈ vbr/mp3/aac/alac/flac/ogg/wav.
+    static func albumMembershipDownloadURL(sku: String, format: String) -> URL? {
+        var c = URLComponents()
+        c.scheme = "http"; c.host = download; c.path = "/membership/download3"
+        c.queryItems = [URLQueryItem(name: "sku", value: sku), URLQueryItem(name: "format", value: format)]
+        return c.url
+    }
+
+    /// Single-song download — the open per-track file on he3 (ext ∈ mp3/ogg/wav/flac/m4a).
+    static func songDownloadURL(artistName: String, albumName: String, song: Song, ext: String) -> URL? {
+        let file = song.mp3
+        let stem = file.hasSuffix(".mp3") ? String(file.dropLast(4)) : file
+        return url(host: he3, path: "/music/\(artistName)/\(albumName)/\(stem).\(ext)")
+    }
+
     // MARK: Quality-resolved streaming (Lossless → Normal fallback)
 
     /// Best stream URL for a track, transparently falling back from Lossless (`_256.m4a`)

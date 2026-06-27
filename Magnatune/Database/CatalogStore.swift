@@ -199,7 +199,7 @@ final class CatalogStore {
     func searchArtists(_ q: String, limit: Int = 50) -> [Artist] {
         let like = "%\(q)%"
         return read {
-            try Artist.filter(sql: "name LIKE ?", arguments: [like])
+            try Artist.filter(sql: "name LIKE ? OR description LIKE ? OR bio LIKE ?", arguments: [like, like, like])
                 .order(sql: "name COLLATE NOCASE").limit(limit).fetchAll($0)
         } ?? []
     }
@@ -207,7 +207,7 @@ final class CatalogStore {
     func searchAlbums(_ q: String, limit: Int = 50) -> [Album] {
         let like = "%\(q)%"
         return read {
-            try Album.filter(sql: "name LIKE ?", arguments: [like])
+            try Album.filter(sql: "name LIKE ? OR description LIKE ?", arguments: [like, like])
                 .order(sql: "name COLLATE NOCASE").limit(limit).fetchAll($0)
         } ?? []
     }

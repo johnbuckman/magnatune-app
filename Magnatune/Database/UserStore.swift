@@ -15,11 +15,15 @@ final class UserStore: ObservableObject {
     @Published private(set) var dislikedAlbumIDs: Set<Int64> = []
     @Published private(set) var dislikedArtistIDs: Set<Int64> = []
 
+    /// Every song id that appears in any user playlist (drives the add-to-playlist icon).
+    @Published private(set) var playlistedSongIDs: Set<Int64> = []
+
     init(path: String) throws {
         dbQueue = try DatabaseQueue(path: path)
         try Self.migrator.migrate(dbQueue)
         reloadFavorites()
         reloadDislikes()
+        reloadPlaylistedSongs()
     }
 
     static var migrator: DatabaseMigrator {
@@ -221,6 +225,7 @@ final class UserStore: ObservableObject {
         try? dbQueue.write { db in
             try db.execute(sql: "DELETE FROM playlist WHERE id = ?", arguments: [id])
         }
+        reloadPlaylistedSongs()
     }
 
     func addSong(_ songID: Int64, toPlaylist playlistID: Int64) {
@@ -229,7 +234,19 @@ final class UserStore: ObservableObject {
             try db.execute(sql: "INSERT INTO playlist_item (playlist_id, song_id, position) VALUES (?,?,?)",
                            arguments: [playlistID, songID, pos])
         }
+        reloadPlaylistedSongs()
     }
+
+    /// All song ids present in any playlist; refreshed on every playlist mutation.
+    private func reloadPlaylistedSongs() {
+        let rows = (try? dbQueue.read { db in
+            try Int64.fetchAll(db, sql: "SELECT DISTINCT song_id FROM playlist_item")
+        }) ?? []
+        playlistedSongIDs = Set(rows)
+    }
+
+    /// True if the song is already in at least one playlist.
+    func isOnAnyPlaylist(_ id: Int64) -> Bool { playlistedSongIDs.contains(id) }
 
     func songIDs(inPlaylist playlistID: Int64) -> [Int64] {
         (try? dbQueue.read { db in
@@ -241,5 +258,18 @@ final class UserStore: ObservableObject {
         try? dbQueue.write { db in
             try db.execute(sql: "DELETE FROM playlist_item WHERE playlist_id = ? AND song_id = ?", arguments: [playlistID, songID])
         }
+        reloadPlaylistedSongs()
+    }
+
+    /// Remove the given songs from every playlist (the "remove from playlist" half of the
+    /// add/remove toggle button).
+    func removeSongsFromAllPlaylists(_ ids: [Int64]) {
+        guard !ids.isEmpty else { return }
+        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
+        try? dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM playlist_item WHERE song_id IN (\(placeholders))",
+                           arguments: StatementArguments(ids))
+        }
+        reloadPlaylistedSongs()
     }
 }
