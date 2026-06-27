@@ -133,7 +133,7 @@ struct RootView: View {
             // Floating rounded-rectangle sidebar card with a soft drop shadow drawn over
             // the content (zIndex 1).
             sidebar
-                .frame(width: 140)
+                .frame(width: 168)
                 .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .shadow(color: .black.opacity(0.375), radius: 1.5, x: 0, y: 1)
@@ -287,6 +287,8 @@ struct RootView: View {
                 Image(systemName: item.icon)
                     .frame(width: 22)            // fixed icon column → text always aligns
                 Text(item.title)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)   // never wrap the label
                 Spacer(minLength: 0)
             }
             .foregroundStyle(labelColor(item))

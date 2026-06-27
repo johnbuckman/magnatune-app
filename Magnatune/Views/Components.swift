@@ -249,13 +249,20 @@ struct FavoriteButton: View {
     let kind: String
     let id: Int64
     var body: some View {
-        // The dislike (Scream) control always sits just to the right of the heart.
+        // The dislike (broken-heart) control always sits just to the right of the heart.
+        let on = user.isFavorite(kind: kind, id: id)
         HStack(spacing: 12) {
             Button {
                 user.toggleFavorite(kind: kind, id: id)
             } label: {
-                Image(systemName: user.isFavorite(kind: kind, id: id) ? "heart.fill" : "heart")
-                    .foregroundStyle(user.isFavorite(kind: kind, id: id) ? .pink : .secondary)
+                // Solid heart when favorited, light outline when not — same cropped-to-bounds
+                // sizing as the dislike icon beside it.
+                Image(on ? "HeartSolid" : "HeartLight")
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .foregroundStyle(on ? .pink : .secondary)
+                    .frame(width: 20, height: 16)
             }
             .buttonStyle(.borderless)
             DislikeButton(kind: kind, id: id)
@@ -276,12 +283,14 @@ struct DislikeButton: View {
         Button {
             user.toggleDislike(kind: kind, id: id)
         } label: {
+            // The asset's viewBox is cropped to the heart outline, so it fills this frame —
+            // sized to match the favorite heart's height beside it.
             Image(disliked ? "HeartCrackSolid" : "HeartCrackLight")
                 .resizable()
                 .renderingMode(.template)
                 .scaledToFit()
                 .foregroundStyle(disliked ? Color(red: 0.72, green: 0.25, blue: 0.27) : .secondary)
-                .frame(width: 19, height: 19)
+                .frame(width: 20, height: 16)
         }
         .buttonStyle(.borderless)
         .help(disliked ? "Disliked — tap to undo" : "I dislike this (hide it)")

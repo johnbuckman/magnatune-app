@@ -22,11 +22,12 @@ struct ArtistDetailView: View {
                         Text(artist.name).font(.largeTitle.bold())
                         HStack(spacing: 14) {
                             let shown = model.visibleTracks(tracks)
+                            let nowPlaying = audio.isPlaying && audio.current?.album.artistId == artist.id
                             Button {
                                 audio.play(tracks: shown, startAt: 0)   // all songs across this artist's albums
                             } label: {
-                                if isPhone { Image(systemName: "play.fill") }
-                                else { Label("Play", systemImage: "play.fill").frame(minWidth: 120) }
+                                if isPhone { Image(systemName: nowPlaying ? "speaker.wave.2.fill" : "play.fill") }
+                                else { Label(nowPlaying ? "Now Playing" : "Play", systemImage: nowPlaying ? "speaker.wave.2.fill" : "play.fill").frame(minWidth: 120) }
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(shown.isEmpty)
@@ -105,18 +106,23 @@ struct AlbumDetailView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         HStack {
+                            let nowPlaying = audio.isPlaying && audio.current?.album.id == album.id
                             Button {
                                 audio.play(tracks: shown, startAt: 0)
                             } label: {
-                                if isPhone { Image(systemName: "play.fill") }
-                                else { Label("Play", systemImage: "play.fill").frame(minWidth: 120) }
+                                if isPhone { Image(systemName: nowPlaying ? "speaker.wave.2.fill" : "play.fill") }
+                                else { Label(nowPlaying ? "Now Playing" : "Play", systemImage: nowPlaying ? "speaker.wave.2.fill" : "play.fill").frame(minWidth: 120) }
                             }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(shown.isEmpty)
                             Button {
                                 audio.shuffleEnabled.toggle()   // on/off mode, doesn't start playback
                             } label: {
-                                Image(systemName: "shuffle")
+                                Image(audio.shuffleEnabled ? "ShufOn" : "ShufOff")
+                                    .resizable()
+                                    .renderingMode(.template)
+                                    .scaledToFit()
+                                    .frame(width: 22, height: 21)
                             }
                                 .buttonStyle(.bordered)
                                 .tint(audio.shuffleEnabled ? Color.accentColor : .secondary)
