@@ -130,6 +130,12 @@ struct SettingsView: View {
                 Toggle("Share & control on local network", isOn: Binding(
                     get: { model.peerSharingEnabled },
                     set: { model.setPeerSharingEnabled($0) }))
+                if model.peerSharingEnabled && !model.localNetworkGranted {
+                    Button { model.requestLocalNetworkAccess() } label: {
+                        Label("Requires device permission", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
                 if model.peerSharingEnabled {
                     Toggle("Auto-stop other music", isOn: Binding(
                         get: { model.autoStopOtherMusic },
@@ -137,6 +143,16 @@ struct SettingsView: View {
                 }
             } header: { Text("Local Network") } footer: {
                 Text("Lets this app see other Magnatune apps on your Wi-Fi. When you're not playing here, the player shows what's playing on another device and its buttons control it. Auto-stop other music pauses other Magnatune apps when you start playing here (both devices must have it on).")
+            }
+
+            groupDivider
+
+            Section {
+                Toggle("Hide things I dislike", isOn: Binding(
+                    get: { model.hideDislikes },
+                    set: { model.setHideDislikes($0) }))
+            } header: { Text("Dislikes") } footer: {
+                Text("Tap the broken-heart icon next to the heart on any song, album, or artist to dislike it. While this is on, disliked things are hidden everywhere. Turn it off to see them again and tap the broken-heart icon to un-dislike.")
             }
 
             groupDivider
@@ -204,7 +220,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Settings")
-        .onAppear { username = creds.username; refreshCacheSize() }
+        .onAppear { username = creds.username; refreshCacheSize(); model.refreshLocalNetworkStatus() }
         .task { await model.checkCatalogUpdate() }
         .sheet(isPresented: $showWhyNotEvil) {
             InfoSheet(title: "Why we are not evil") {

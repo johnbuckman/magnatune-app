@@ -86,6 +86,9 @@ final class PeerService: ObservableObject {
     private var lastSnapshot = PeerNowPlaying(state: .idle, songID: nil, position: 0)
 
     private static let serviceType = "_magnatune._tcp"
+    /// Same type, exposed for the Local Network authorization probe (must be a type declared
+    /// in Info.plist's NSBonjourServices so the browse is allowed on iOS).
+    fileprivate static let serviceTypeForProbe = serviceType
     private let netQueue = DispatchQueue(label: "com.magnatune.peer")
     private let log = Logger(subsystem: "com.magnatune.player", category: "peer")
 
@@ -327,5 +330,80 @@ final class PeerService: ObservableObject {
         #else
         return "ios"
         #endif
+    }
+}
+
+// MARK: - Local Network authorization probe
+
+/// Best-effort probe of the current Local Network authorization, used to decide whether to
+/// show our in-app explainer. It advertises a throwaway Bonjour service and browses for it:
+/// if it sees the service, access is granted; if the browser goes to `.waiting`, it's
+/// denied. Crucially, when the permission has ALREADY been decided this resolves WITHOUT
+/// presenting the system prompt (granted → true, denied → false).
+///
+/// There is no iOS API to read the not-yet-decided state without triggering the prompt — any
+/// Bonjour activity in that state shows it — so callers gate the first-ever request behind
+/// their own flag and only use this probe once the user has been asked at least once.
+@MainActor
+final class LocalNetworkAuthorization {
+    private var browser: NWBrowser?
+    private var listener: NWListener?
+    private var timeoutTask: Task<Void, Never>?
+    private var completion: ((Bool) -> Void)?
+    // Reuse the app's real, already-declared service type. On iOS, NWBrowser can ONLY
+    // browse Bonjour types listed in Info.plist's NSBonjourServices — an undeclared type
+    // silently returns nothing, which would make this probe always read "denied". The probe
+    // runs for <1s before the real PeerService starts, so there's no conflict.
+    private let probeType = PeerService.serviceTypeForProbe
+    private let queue = DispatchQueue(label: "com.magnatune.lnprobe")
+
+    /// Resolves `true` if Local Network access is granted, `false` if denied/unavailable.
+    /// Falls back to `false` after `timeout` so a stuck probe never hangs the caller.
+    func check(timeout: TimeInterval = 3, _ completion: @escaping (Bool) -> Void) {
+        teardown()                       // restart cleanly if a probe is already in flight
+        self.completion = completion
+
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
+
+        do {
+            let listener = try NWListener(using: params)
+            listener.service = NWListener.Service(name: "probe", type: probeType)
+            listener.newConnectionHandler = { $0.cancel() }
+            listener.start(queue: queue)
+            self.listener = listener
+        } catch {
+            finish(false); return
+        }
+
+        let browser = NWBrowser(for: .bonjour(type: probeType, domain: nil), using: params)
+        browser.stateUpdateHandler = { [weak self] state in
+            if case .waiting = state {            // a local browse only "waits" when not permitted
+                Task { @MainActor in self?.finish(false) }
+            }
+        }
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            if !results.isEmpty { Task { @MainActor in self?.finish(true) } }
+        }
+        browser.start(queue: queue)
+        self.browser = browser
+
+        timeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            self?.finish(false)
+        }
+    }
+
+    private func finish(_ granted: Bool) {
+        guard let completion else { return }
+        self.completion = nil
+        teardown()
+        completion(granted)
+    }
+
+    private func teardown() {
+        timeoutTask?.cancel(); timeoutTask = nil
+        browser?.cancel(); browser = nil
+        listener?.cancel(); listener = nil
     }
 }

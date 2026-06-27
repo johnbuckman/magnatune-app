@@ -48,6 +48,15 @@ final class AudioPlayer: ObservableObject {
     private var ticker: Timer?
     private var fadeTimer: Timer?
     private var crossfading = false
+    /// True once the upcoming track has been buffered onto the inactive player (muted,
+    /// paused) ahead of the fade window, but before the audible ramp has begun.
+    private var crossfadePrepared = false
+    private var preparedNextSongID: Int64?
+    private var fadeStep = 0
+    /// Start buffering the incoming track this many seconds before the fade window so it
+    /// can begin playing the instant the ramp starts — otherwise the first second(s) of
+    /// the fade are silent while the incoming item buffers.
+    private let crossfadeLead: Double = 3
     private var endObserver: NSObjectProtocol?
 
     /// User-configurable crossfade length (seconds), clamped to 1...10. Read live so a
@@ -195,38 +204,58 @@ final class AudioPlayer: ObservableObject {
 
     // MARK: Crossfade
 
-    private func beginCrossfade() {
-        guard hasNext, !crossfading else { return }
+    /// Phase 1: load the upcoming track onto the inactive player (muted, paused) ahead of
+    /// the fade window, so it's buffered and ready to play the moment the ramp begins.
+    /// Resolving/probing the stream URL happens here — outside the fade — so it can't eat
+    /// into the fade time.
+    private func prepareCrossfade() {
+        guard hasNext, !crossfadePrepared, !crossfading else { return }
+        // Claim it up front so the ticker doesn't re-enter while we resolve/probe.
+        crossfadePrepared = true
         let nextTrack = queue[index + 1]
         let startIndex = index
-        // Claim the crossfade up front so the ticker doesn't re-enter while we resolve/probe.
-        crossfading = true
         Task { @MainActor in
-            guard let asset = await makeAsset(for: nextTrack) else { self.crossfading = false; return }
-            // Bail if anything changed while resolving (skip, stop, queue change).
-            guard self.crossfading, self.index == startIndex, self.hasNext,
+            guard let asset = await makeAsset(for: nextTrack) else { self.crossfadePrepared = false; return }
+            // Bail if anything changed while resolving (skip, stop, queue change, cancel).
+            guard self.crossfadePrepared, !self.crossfading, self.index == startIndex, self.hasNext,
                   self.queue[self.index + 1].song.id == nextTrack.song.id else { return }
-
             let item = AVPlayerItem(asset: asset)
             self.inactive.volume = 0
             self.inactive.replaceCurrentItem(with: item)
             self.inactive.seek(to: .zero, completionHandler: { _ in })
-            // The upcoming track owns the end-of-track observer from here on.
-            self.observeEnd(item: item)
-            if self.isPlaying { self.inactive.play() }
+            self.preparedNextSongID = nextTrack.song.id
+        }
+    }
 
-            let interval = 0.05
-            let totalSteps = max(1, Int(self.crossfadeDuration / interval))
-            var step = 0
-            self.fadeTimer?.invalidate()
-            self.fadeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, self.crossfading else { return }
-                    step += 1
-                    let f = min(1.0, Double(step) / Double(totalSteps))
-                    self.active.volume = Float(1 - f) * self.volume
-                    self.inactive.volume = Float(f) * self.volume
-                    if f >= 1.0 { self.finalizeCrossfade() }
+    /// Phase 2: begin the audible crossfade. The volume ramp is driven by the outgoing
+    /// track's *remaining time*, so it spans the full configured duration and completes
+    /// exactly as the outgoing track ends — regardless of timer jitter or how long the
+    /// incoming track took to buffer.
+    private func beginCrossfade() {
+        guard crossfadePrepared, hasNext, !crossfading,
+              inactive.currentItem != nil,
+              preparedNextSongID == queue[index + 1].song.id else { return }
+        crossfading = true
+        fadeStep = 0
+        // The incoming track owns the end-of-track observer from here on.
+        if let item = inactive.currentItem { observeEnd(item: item) }
+        if isPlaying { inactive.play() }
+
+        let interval = 0.05
+        // Hard cap so a stall near the end can't hang the fade forever.
+        let maxSteps = Int((crossfadeDuration + 1.5) / interval)
+        fadeTimer?.invalidate()
+        fadeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.crossfading else { return }
+                self.fadeStep += 1
+                let remaining = self.duration - self.active.currentTime().seconds
+                // f goes 0 → 1 across the configured crossfade length, pinned to the song end.
+                let f = min(1.0, max(0.0, (self.crossfadeDuration - remaining) / self.crossfadeDuration))
+                self.active.volume = Float(1 - f) * self.volume
+                self.inactive.volume = Float(f) * self.volume
+                if f >= 1.0 || remaining <= 0.05 || self.fadeStep >= maxSteps {
+                    self.finalizeCrossfade()
                 }
             }
         }
@@ -241,6 +270,8 @@ final class AudioPlayer: ObservableObject {
         active.volume = volume
         index += 1
         crossfading = false
+        crossfadePrepared = false
+        preparedNextSongID = nil
         if let track = current {
             duration = TimeInterval(track.song.duration ?? 0)
             userStore?.recordPlay(songID: track.song.id)
@@ -249,14 +280,18 @@ final class AudioPlayer: ObservableObject {
         prefetchNext()
     }
 
+    /// Tear down any in-progress OR prepared (buffered-but-not-yet-ramping) crossfade and
+    /// restore the active player to full volume. Called on every manual queue change.
     private func cancelCrossfade() {
-        guard crossfading else { return }
+        guard crossfading || crossfadePrepared else { return }
         fadeTimer?.invalidate(); fadeTimer = nil
+        crossfading = false
+        crossfadePrepared = false
+        preparedNextSongID = nil
         inactive.pause()
         inactive.replaceCurrentItem(with: nil)
         inactive.volume = 1
         active.volume = volume
-        crossfading = false
         // re-attach the end observer to the (still-current) active item
         if let item = active.currentItem { observeEnd(item: item) }
     }
@@ -275,9 +310,16 @@ final class AudioPlayer: ObservableObject {
         if t.isFinite { currentTime = t }
         if let d = active.currentItem?.duration.seconds, d.isFinite, d > 0 { duration = d }
 
-        if isPlaying, !crossfading, crossfadeEnabled, hasNext, duration > crossfadeDuration + 1 {
-            let remaining = duration - currentTime
-            if remaining > 0, remaining <= crossfadeDuration { beginCrossfade() }
+        guard isPlaying, crossfadeEnabled, hasNext, duration > crossfadeDuration + 1 else { return }
+        let remaining = duration - currentTime
+        guard remaining > 0 else { return }
+        // Phase 1: buffer the next track a few seconds before the fade window.
+        if !crossfadePrepared, !crossfading, remaining <= crossfadeDuration + crossfadeLead {
+            prepareCrossfade()
+        }
+        // Phase 2: start the audible ramp exactly `crossfadeDuration` from the end.
+        if crossfadePrepared, !crossfading, remaining <= crossfadeDuration {
+            beginCrossfade()
         }
     }
 

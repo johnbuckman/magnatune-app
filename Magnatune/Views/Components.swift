@@ -84,29 +84,87 @@ struct ArtistPhoto: View {
 
     // Sized artist_N.jpg thumbnails available on the server.
     private static let tiers = [50, 200, 420, 840]
+    /// Index into `candidates` — advances on a 404 so a missing tier falls back to an
+    /// available one instead of showing the placeholder.
+    @State private var attempt = 0
 
     private var pixelSize: Int {
         let needed = points * displayScale
         return ArtistPhoto.tiers.first { CGFloat($0) >= needed } ?? ArtistPhoto.tiers.last!
     }
 
-    private var url: URL? {
-        // Prefer the tiny sized thumbnail (lives in an album dir); fall back to the
-        // full-resolution original only when the artist has no album to source it from.
+    /// Ordered fallback chain: the ideal tier first, then larger tiers, then smaller ones,
+    /// and finally the full-resolution original. Not every album directory has every sized
+    /// `artist_<N>.jpg` generated (some have only a subset), so requesting a single tier
+    /// 404s for those artists — we try the others before giving up. Tiers already known to
+    /// be missing (a previous 404, remembered across launches) are skipped, so after the
+    /// first resolve we go straight to an available size — which Kingfisher has cached on
+    /// disk — with no repeated 404 round-trip or placeholder flash.
+    private var candidates: [URL] {
+        var urls: [URL] = []
         if let album = model.catalog?.firstAlbumName(forArtist: artist.id) {
-            return URLBuilder.artistPhotoURL(artistName: artist.name, albumName: album, size: pixelSize)
+            let ideal = pixelSize
+            let larger = ArtistPhoto.tiers.filter { $0 > ideal }            // ascending
+            let smaller = ArtistPhoto.tiers.filter { $0 < ideal }.sorted(by: >)
+            for sz in [ideal] + larger + smaller {
+                if let u = URLBuilder.artistPhotoURL(artistName: artist.name, albumName: album, size: sz) {
+                    urls.append(u)
+                }
+            }
         }
-        return URLBuilder.artistPhotoURL(artist)
+        if let original = URLBuilder.artistPhotoURL(artist) { urls.append(original) }
+        let live = urls.filter { !ArtistPhotoCache.shared.isMissing($0) }
+        return live.isEmpty ? urls : live
     }
 
     var body: some View {
+        let list = candidates
+        let url = attempt < list.count ? list[attempt] : nil
         KFImage(url)
             .resizable()
+            .onFailure { err in
+                if let url, ArtistPhotoCache.isPermanentlyMissing(err) {
+                    ArtistPhotoCache.shared.markMissing(url)   // remember the 404, don't retry it
+                }
+                if attempt + 1 < list.count { attempt += 1 }
+            }
             .placeholder {
                 Circle().fill(.quaternary)
                     .overlay(Image(systemName: "person.fill").foregroundStyle(.secondary))
             }
             .aspectRatio(contentMode: .fill)
+            .id(url)                                  // reload when the fallback URL changes
+            .onChange(of: artist.id) { _, _ in attempt = 0 }   // reset when the row is reused
+    }
+}
+
+/// Remembers which sized `artist_<N>.jpg` URLs returned 404 so `ArtistPhoto` skips them on
+/// future loads instead of re-requesting a tier that doesn't exist. Persisted in
+/// UserDefaults, so the avoid-list survives relaunches and the available (Kingfisher-cached)
+/// tier loads immediately. Main-thread only (driven from SwiftUI body/onFailure).
+@MainActor
+final class ArtistPhotoCache {
+    static let shared = ArtistPhotoCache()
+    private let key = "artistphoto.missing"
+    private var missing: Set<String>
+
+    private init() { missing = Set(UserDefaults.standard.stringArray(forKey: key) ?? []) }
+
+    func isMissing(_ url: URL) -> Bool { missing.contains(url.absoluteString) }
+
+    func markMissing(_ url: URL) {
+        guard missing.insert(url.absoluteString).inserted else { return }
+        UserDefaults.standard.set(Array(missing), forKey: key)
+    }
+
+    /// True only for a permanent (4xx) HTTP failure — transient/network errors are NOT
+    /// remembered, so a tier isn't blacklisted just because the network blipped.
+    static func isPermanentlyMissing(_ error: KingfisherError) -> Bool {
+        if case .responseError(let reason) = error,
+           case .invalidHTTPStatusCode(let response) = reason {
+            return (400...499).contains(response.statusCode)
+        }
+        return false
     }
 }
 
@@ -191,13 +249,42 @@ struct FavoriteButton: View {
     let kind: String
     let id: Int64
     var body: some View {
+        // The dislike (Scream) control always sits just to the right of the heart.
+        HStack(spacing: 12) {
+            Button {
+                user.toggleFavorite(kind: kind, id: id)
+            } label: {
+                Image(systemName: user.isFavorite(kind: kind, id: id) ? "heart.fill" : "heart")
+                    .foregroundStyle(user.isFavorite(kind: kind, id: id) ? .pink : .secondary)
+            }
+            .buttonStyle(.borderless)
+            DislikeButton(kind: kind, id: id)
+        }
+    }
+}
+
+/// "I dislike this" control — a broken-heart icon shown beside every heart. Tapping it
+/// marks the song/album/artist as disliked (which the app then hides while "Hide things I
+/// dislike" is on); tapping again un-dislikes it. A disliked item shows the SOLID broken
+/// heart (only visible when "Hide things I dislike" is off); otherwise the light outline.
+struct DislikeButton: View {
+    @EnvironmentObject var user: UserStore
+    let kind: String
+    let id: Int64
+    var body: some View {
+        let disliked = user.isDisliked(kind: kind, id: id)
         Button {
-            user.toggleFavorite(kind: kind, id: id)
+            user.toggleDislike(kind: kind, id: id)
         } label: {
-            Image(systemName: user.isFavorite(kind: kind, id: id) ? "heart.fill" : "heart")
-                .foregroundStyle(user.isFavorite(kind: kind, id: id) ? .pink : .secondary)
+            Image(disliked ? "HeartCrackSolid" : "HeartCrackLight")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .foregroundStyle(disliked ? Color(red: 0.72, green: 0.25, blue: 0.27) : .secondary)
+                .frame(width: 19, height: 19)
         }
         .buttonStyle(.borderless)
+        .help(disliked ? "Disliked — tap to undo" : "I dislike this (hide it)")
     }
 }
 

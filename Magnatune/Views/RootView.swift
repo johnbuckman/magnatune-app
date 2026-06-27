@@ -92,6 +92,21 @@ struct RootView: View {
             .environmentObject(model.audio)
         }
         .background(MacWindowConfigurator())
+        .onAppear { model.startPeerSharingIfNeeded() }
+        .alert(model.localNetworkDenied ? "Local Network Access Needed" : "Find Magnatune Players Nearby",
+               isPresented: $model.showLocalNetworkPrimer) {
+            if model.localNetworkDenied {
+                Button("Not Now", role: .cancel) { model.dismissLocalNetworkPrimer() }
+                Button("Open Settings") { model.openLocalNetworkSettings() }
+            } else {
+                Button("Not Now", role: .cancel) { model.declineLocalNetworkPrimer() }
+                Button("OK") { model.confirmLocalNetworkPrimer() }
+            }
+        } message: {
+            Text(model.localNetworkDenied
+                 ? "Magnatune isn’t allowed to find devices on your local network, so it can’t see other Magnatune apps. To use Share & control, turn on Local Network for Magnatune in Settings."
+                 : "Magnatune can see other Magnatune apps on your Wi-Fi, so that when you’re not playing here, this player can show and control what’s playing on another device.\n\nTap OK and iOS will ask permission to find devices on your local network. You can change this any time in Settings.")
+        }
     }
 
     /// Shared navigation stack (content + drill-down destinations), reused by both the

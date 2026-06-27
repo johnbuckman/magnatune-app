@@ -11,10 +11,15 @@ final class UserStore: ObservableObject {
     @Published private(set) var favoriteAlbumIDs: Set<Int64> = []
     @Published private(set) var favoriteArtistIDs: Set<Int64> = []
 
+    @Published private(set) var dislikedSongIDs: Set<Int64> = []
+    @Published private(set) var dislikedAlbumIDs: Set<Int64> = []
+    @Published private(set) var dislikedArtistIDs: Set<Int64> = []
+
     init(path: String) throws {
         dbQueue = try DatabaseQueue(path: path)
         try Self.migrator.migrate(dbQueue)
         reloadFavorites()
+        reloadDislikes()
     }
 
     static var migrator: DatabaseMigrator {
@@ -48,6 +53,14 @@ final class UserStore: ObservableObject {
                 t.column("local_dir", .text)
                 t.column("created_at", .double).notNull()
                 t.primaryKey(["album_id", "format"])
+            }
+        }
+        m.registerMigration("v2_dislikes") { db in
+            try db.create(table: "dislikes") { t in
+                t.column("kind", .text).notNull()      // "song" | "album" | "artist"
+                t.column("ref_id", .integer).notNull()
+                t.column("created_at", .double).notNull()
+                t.primaryKey(["kind", "ref_id"])
             }
         }
         return m
@@ -86,9 +99,12 @@ final class UserStore: ObservableObject {
             } else {
                 try db.execute(sql: "INSERT OR REPLACE INTO favorites (kind, ref_id, created_at) VALUES (?,?,?)",
                                arguments: [kind, id, now])
+                // Can't both love and dislike the same thing.
+                try db.execute(sql: "DELETE FROM dislikes WHERE kind = ? AND ref_id = ?", arguments: [kind, id])
             }
         }
         reloadFavorites()
+        reloadDislikes()
     }
 
     /// Delete several favorites in one transaction (used to remove redundant favorites).
@@ -105,6 +121,53 @@ final class UserStore: ObservableObject {
     func favoriteIDs(kind: String) -> [Int64] {
         (try? dbQueue.read { db in
             try Int64.fetchAll(db, sql: "SELECT ref_id FROM favorites WHERE kind = ? ORDER BY created_at DESC", arguments: [kind])
+        }) ?? []
+    }
+
+    // MARK: Dislikes ("I dislike this" — suppressed from the UI)
+
+    private func reloadDislikes() {
+        dislikedSongIDs = dislikedIds(kind: "song")
+        dislikedAlbumIDs = dislikedIds(kind: "album")
+        dislikedArtistIDs = dislikedIds(kind: "artist")
+    }
+
+    private func dislikedIds(kind: String) -> Set<Int64> {
+        let rows = (try? dbQueue.read { db in
+            try Int64.fetchAll(db, sql: "SELECT ref_id FROM dislikes WHERE kind = ?", arguments: [kind])
+        }) ?? []
+        return Set(rows)
+    }
+
+    func isDisliked(kind: String, id: Int64) -> Bool {
+        switch kind {
+        case "song": return dislikedSongIDs.contains(id)
+        case "album": return dislikedAlbumIDs.contains(id)
+        case "artist": return dislikedArtistIDs.contains(id)
+        default: return false
+        }
+    }
+
+    func toggleDislike(kind: String, id: Int64) {
+        let now = Date().timeIntervalSince1970
+        let exists = isDisliked(kind: kind, id: id)
+        try? dbQueue.write { db in
+            if exists {
+                try db.execute(sql: "DELETE FROM dislikes WHERE kind = ? AND ref_id = ?", arguments: [kind, id])
+            } else {
+                try db.execute(sql: "INSERT OR REPLACE INTO dislikes (kind, ref_id, created_at) VALUES (?,?,?)",
+                               arguments: [kind, id, now])
+                // Disliking removes any favorite — opposite reactions can't coexist.
+                try db.execute(sql: "DELETE FROM favorites WHERE kind = ? AND ref_id = ?", arguments: [kind, id])
+            }
+        }
+        reloadDislikes()
+        reloadFavorites()
+    }
+
+    func dislikeIDs(kind: String) -> [Int64] {
+        (try? dbQueue.read { db in
+            try Int64.fetchAll(db, sql: "SELECT ref_id FROM dislikes WHERE kind = ? ORDER BY created_at DESC", arguments: [kind])
         }) ?? []
     }
 

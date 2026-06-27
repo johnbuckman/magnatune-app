@@ -31,6 +31,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var downloadedTagIDs: Set<Int64> = []
     @Published private(set) var downloadedCatalogPlaylistIDs: Set<Int64> = []
 
+    // MARK: Dislikes (suppress-from-UI)
+    static let hideDislikesKey = "dislike.hide.enabled"
+    /// When on, songs/albums/artists the user disliked are hidden everywhere. Turn off to
+    /// see them again (and un-dislike via the same icon). Default on.
+    @Published var hideDislikes: Bool = UserDefaults.standard.object(forKey: "dislike.hide.enabled") as? Bool ?? true
+    /// Disliked ids expanded through the catalog: a disliked artist also suppresses its
+    /// albums and songs; a disliked album also suppresses its songs.
+    @Published private(set) var suppressedArtistIDs: Set<Int64> = []
+    @Published private(set) var suppressedAlbumIDs: Set<Int64> = []
+    @Published private(set) var suppressedSongIDs: Set<Int64> = []
+
     /// Whether favorites are auto-downloaded for offline listening.
     static let autoDownloadKey = "autodownload.favorites"
     @Published var autoDownloadFavorites: Bool = UserDefaults.standard.object(forKey: "autodownload.favorites") as? Bool ?? true
@@ -46,6 +57,21 @@ final class AppModel: ObservableObject {
     /// The peer we're currently showing/controlling because local audio is idle (most
     /// recently active remote instance). Nil when we're playing locally or no peer is active.
     @Published private(set) var remoteFocus: Peer?
+
+    static let localNetworkPromptedKey = "peer.localNetworkPrompted"
+    /// Whether we've already shown our explainer and triggered the iOS Local Network
+    /// permission prompt at least once. We never trigger that system prompt at launch
+    /// before the UI is on screen (it would appear over a blank window).
+    private var hasRequestedLocalNetwork = UserDefaults.standard.bool(forKey: "peer.localNetworkPrompted")
+    /// Drives the in-app explainer shown when Local Network access isn't granted.
+    @Published var showLocalNetworkPrimer = false
+    /// When the explainer is showing: false = first-time priming (OK triggers the iOS
+    /// prompt), true = permission was actively denied (button deep-links to Settings).
+    @Published var localNetworkDenied = false
+    /// Whether Local Network access is currently granted. Drives the Settings indicator.
+    /// Optimistic default so the warning doesn't flash before the first probe completes.
+    @Published var localNetworkGranted = true
+    private let lnAuth = LocalNetworkAuthorization()
 
     private let pathMonitor = NWPathMonitor()
     private var favoritesObserver: AnyCancellable?
@@ -70,11 +96,13 @@ final class AppModel: ObservableObject {
         refreshDownloadedSets()
         startNetworkMonitor()
 
-        // On any favorites change: drop redundant (more-precise) favorites, then sync.
+        // On any favorites/dislikes change: drop redundant favorites, refresh the dislike
+        // suppression sets, then sync downloads.
         favoritesObserver = userStore.objectWillChange
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
             .sink { [weak self] in
                 self?.deduplicateFavorites()
+                self?.recomputeDislikeSuppression()
                 self?.syncAutoDownloads()
             }
 
@@ -142,16 +170,115 @@ final class AppModel: ObservableObject {
             .sink { [weak self] _ in self?.recomputeRemoteFocus() }
             .store(in: &peerCancellables)
 
-        if peerSharingEnabled { peerService.start(); startHeartbeat() }
+        // NB: we do NOT start advertising/browsing here. Starting the Bonjour
+        // listener/browser is what triggers the iOS Local Network permission prompt, and at
+        // launch the UI isn't on screen yet — the prompt would appear over a blank window.
+        // The UI calls `startPeerSharingIfNeeded()` once it's visible (see RootView).
+    }
+
+    /// Called once the main UI is on screen. Decides whether to start peer sharing or to
+    /// show the explainer, based on the *actual* Local Network permission state:
+    ///  • never asked  → show the priming explainer (OK triggers the iOS prompt). We can't
+    ///    probe this state without iOS showing the prompt itself, so it's gated by a flag.
+    ///  • asked before → probe the OS (no prompt): granted ⇒ start silently; denied ⇒ show
+    ///    the explainer with a Settings deep-link.
+    func startPeerSharingIfNeeded() {
+        guard peerSharingEnabled else { return }
+        guard hasRequestedLocalNetwork else {
+            localNetworkDenied = false
+            showLocalNetworkPrimer = true
+            return
+        }
+        lnAuth.check { [weak self] granted in
+            guard let self else { return }
+            self.localNetworkGranted = granted
+            if granted {
+                self.peerService.start(); self.startHeartbeat()
+            } else if self.isOnline {
+                // Only treat a failed probe as a real denial when there's a network path —
+                // otherwise (airplane mode / no Wi-Fi) the probe also can't see services and
+                // we'd wrongly nag the user to change Settings.
+                self.localNetworkDenied = true
+                self.showLocalNetworkPrimer = true
+            }
+        }
+    }
+
+    /// Re-evaluate Local Network permission for the Settings indicator (no prompt, no
+    /// explainer). Called when the Settings screen appears.
+    func refreshLocalNetworkStatus() {
+        guard peerSharingEnabled else { localNetworkGranted = true; return }
+        guard hasRequestedLocalNetwork else { localNetworkGranted = false; return }
+        lnAuth.check { [weak self] granted in self?.localNetworkGranted = granted }
+    }
+
+    /// Action for the Settings "Requires device permission" button: ask iOS the first time,
+    /// or deep-link to Settings if it was already denied, then refresh the indicator.
+    func requestLocalNetworkAccess() {
+        if hasRequestedLocalNetwork {
+            openLocalNetworkSettings()           // already decided & not granted → Settings
+        } else {
+            markLocalNetworkRequested()
+            peerService.start(); startHeartbeat()  // first ask → iOS prompt
+        }
+        scheduleLocalNetworkRefresh()
+    }
+
+    private func scheduleLocalNetworkRefresh() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            self.refreshLocalNetworkStatus()
+        }
+    }
+
+    /// User tapped OK on the first-time explainer: remember we've asked, then start peer
+    /// sharing — which triggers the iOS Local Network permission prompt.
+    func confirmLocalNetworkPrimer() {
+        showLocalNetworkPrimer = false
+        markLocalNetworkRequested()
+        peerService.start(); startHeartbeat()
+    }
+
+    /// User declined the first-time explainer: turn sharing off so we don't keep nagging
+    /// and the stored state matches reality.
+    func declineLocalNetworkPrimer() {
+        showLocalNetworkPrimer = false
+        setPeerSharingEnabled(false)
+    }
+
+    /// Just dismiss the explainer (used by the "denied" variant, leaving the Share toggle
+    /// as-is so the user can grant access in Settings and have it take effect next launch).
+    func dismissLocalNetworkPrimer() {
+        showLocalNetworkPrimer = false
+    }
+
+    /// Deep-link to this app's Settings page so the user can enable Local Network access.
+    func openLocalNetworkSettings() {
+        showLocalNetworkPrimer = false
+        #if canImport(UIKit)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+        #endif
+    }
+
+    private func markLocalNetworkRequested() {
+        guard !hasRequestedLocalNetwork else { return }
+        hasRequestedLocalNetwork = true
+        UserDefaults.standard.set(true, forKey: Self.localNetworkPromptedKey)
     }
 
     func setPeerSharingEnabled(_ on: Bool) {
         peerSharingEnabled = on
         UserDefaults.standard.set(on, forKey: Self.peerSharingKey)
         if on {
+            // Toggled on from Settings — the UI is already visible, so request directly.
+            markLocalNetworkRequested()
             peerService.start(); startHeartbeat(); broadcastPlaybackState()
+            scheduleLocalNetworkRefresh()
         } else {
             peerService.stop(); stopHeartbeat(); remoteFocus = nil
+            localNetworkGranted = true   // feature off → hide the permission warning
         }
     }
 
@@ -272,6 +399,38 @@ final class AppModel: ObservableObject {
     private func openCatalog() {
         catalog = try? CatalogStore(path: CatalogSync.catalogPath())
         catalogReady = (catalog != nil)
+        recomputeDislikeSuppression()
+    }
+
+    // MARK: Dislikes
+
+    func setHideDislikes(_ on: Bool) {
+        hideDislikes = on
+        UserDefaults.standard.set(on, forKey: Self.hideDislikesKey)
+    }
+
+    /// Rebuild the suppressed-id sets from the user's dislikes, expanded through the
+    /// catalog (disliked artist ⇒ its albums + songs; disliked album ⇒ its songs). Cheap
+    /// because the number of disliked items is small.
+    func recomputeDislikeSuppression() {
+        guard let c = catalog else {
+            suppressedArtistIDs = []; suppressedAlbumIDs = []; suppressedSongIDs = []
+            return
+        }
+        let artists = Set(userStore.dislikeIDs(kind: "artist"))
+        let albumsDirect = Set(userStore.dislikeIDs(kind: "album"))
+        var albums = albumsDirect
+        var songs = Set(userStore.dislikeIDs(kind: "song"))
+        for aid in artists {
+            for al in c.albums(forArtist: aid) { albums.insert(al.id) }
+            for s in c.songs(forArtist: aid) { songs.insert(s.id) }
+        }
+        for alid in albumsDirect {
+            for s in c.songs(forAlbum: alid) { songs.insert(s.id) }
+        }
+        suppressedArtistIDs = artists
+        suppressedAlbumIDs = albums
+        suppressedSongIDs = songs
     }
 
     func refreshCatalog(force: Bool = false) async {
@@ -394,16 +553,24 @@ final class AppModel: ObservableObject {
     // When online these are pass-throughs; when offline they keep only downloaded items.
 
     func visibleAlbums(_ albums: [Album]) -> [Album] {
-        isOnline ? albums : albums.filter { downloadedAlbumIDs.contains($0.id) }
+        var r = isOnline ? albums : albums.filter { downloadedAlbumIDs.contains($0.id) }
+        if hideDislikes { r = r.filter { !suppressedAlbumIDs.contains($0.id) } }
+        return r
     }
     func visibleArtists(_ artists: [Artist]) -> [Artist] {
-        isOnline ? artists : artists.filter { downloadedArtistIDs.contains($0.id) }
+        var r = isOnline ? artists : artists.filter { downloadedArtistIDs.contains($0.id) }
+        if hideDislikes { r = r.filter { !suppressedArtistIDs.contains($0.id) } }
+        return r
     }
     func visibleSongs(_ songs: [Song]) -> [Song] {
-        isOnline ? songs : songs.filter { downloadedSongIDs.contains($0.id) }
+        var r = isOnline ? songs : songs.filter { downloadedSongIDs.contains($0.id) }
+        if hideDislikes { r = r.filter { !suppressedSongIDs.contains($0.id) } }
+        return r
     }
     func visibleTracks(_ tracks: [PlayableTrack]) -> [PlayableTrack] {
-        isOnline ? tracks : tracks.filter { downloadedSongIDs.contains($0.song.id) }
+        var r = isOnline ? tracks : tracks.filter { downloadedSongIDs.contains($0.song.id) }
+        if hideDislikes { r = r.filter { !suppressedSongIDs.contains($0.song.id) } }
+        return r
     }
     func visibleGenres(_ genres: [Genre]) -> [Genre] {
         isOnline ? genres : genres.filter { downloadedGenreIDs.contains($0.id) }
