@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ArtistDetailView: View {
     @EnvironmentObject var model: AppModel
@@ -38,8 +39,7 @@ struct ArtistDetailView: View {
                     Spacer()
                 }
                 if let bio = artist.bio ?? artist.description, !bio.isEmpty {
-                    Text(bio).font(.body).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ExpandableText(text: bio)
                 }
                 Divider()
                 Text("Albums").font(.title2.bold())
@@ -135,8 +135,7 @@ struct AlbumDetailView: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     if let desc = album.description, !desc.isEmpty {
-                        Text(desc).font(.body).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        ExpandableText(text: desc)
                     }
                     if !genres.isEmpty || !tags.isEmpty {
                         FlowLayout(spacing: 8) {
@@ -178,5 +177,46 @@ struct AlbumDetailView: View {
         let gt = c.genresAndTags(forAlbum: album.id)
         genres = gt.genres
         tags = gt.tags
+    }
+}
+
+/// Secondary body text clamped to `lineLimit` lines with a "Show more"/"Show less" toggle
+/// that appears ONLY when the text is actually longer than the limit. Mirrors the web
+/// app's click-to-expand artist bio / album description.
+struct ExpandableText: View {
+    let text: String
+    var lineLimit: Int = 4
+    @State private var expanded = false
+    @State private var truncated = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(text)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineLimit(expanded ? nil : lineLimit)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.onAppear {
+                            guard geo.size.width > 1 else { return }
+                            let fullH = (text as NSString).boundingRect(
+                                with: CGSize(width: geo.size.width, height: .greatestFiniteMagnitude),
+                                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                                attributes: [.font: UIFont.preferredFont(forTextStyle: .body)],
+                                context: nil).height
+                            if fullH > geo.size.height + 1 { truncated = true }
+                        }
+                    }
+                )
+            if truncated {
+                Button(expanded ? "Show less" : "Show more") {
+                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+                }
+                .font(.callout)
+                .foregroundStyle(Color.accentColor)
+                .buttonStyle(.plain)
+            }
+        }
     }
 }
