@@ -96,6 +96,26 @@ struct AlbumCell: View {
     }
 }
 
+/// Grid cell for an artist (circular photo + name), mirroring `AlbumCell`. Used by the
+/// artist-page "You might also like" recommendations. The Color.clear overlay trick gives a
+/// square that fills the grid column width regardless of the photo's native aspect ratio.
+struct ArtistGridCell: View {
+    let artist: Artist
+    var body: some View {
+        NavigationLink(value: artist) {
+            VStack(alignment: .leading, spacing: 6) {
+                Color.clear
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay(ArtistPhoto(artist: artist, points: 150))
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
+                Text(artist.name).font(.callout).lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct AlbumsView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.isPhoneLayout) private var isPhone

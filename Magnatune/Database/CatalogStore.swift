@@ -63,6 +63,34 @@ final class CatalogStore {
         } ?? nil
     }
 
+    // MARK: Recommendations ("You might also like")
+
+    /// The magnatune recommendation engine's ranked sibling albums for an album.
+    func recommendedAlbums(forAlbum albumId: Int64) -> [Album] {
+        read {
+            try Album.fetchAll($0, sql:
+                "SELECT a.* FROM recommendations r " +
+                "JOIN albums a ON a.album_id = r.recommended_album_id " +
+                "WHERE r.album_id = ? ORDER BY r.rank", arguments: [albumId])
+        } ?? []
+    }
+
+    /// Artist-level recommendations: aggregate the per-album recs across all of this
+    /// artist's albums, tally which OTHER artists are recommended most (one vote per rec),
+    /// and drop the artist itself. Used for the artist page's "You might also like".
+    func recommendedArtists(forArtist artistId: Int64, limit: Int = 16) -> [Artist] {
+        read {
+            try Artist.fetchAll($0, sql:
+                "SELECT ar.* FROM recommendations r " +
+                "JOIN albums ra ON ra.album_id = r.recommended_album_id " +
+                "JOIN artists ar ON ar.artists_id = ra.artist_id " +
+                "WHERE r.album_id IN (SELECT album_id FROM albums WHERE artist_id = ?) " +
+                "AND ra.artist_id <> ? " +
+                "GROUP BY ar.artists_id ORDER BY COUNT(*) DESC, ar.name COLLATE NOCASE LIMIT ?",
+                arguments: [artistId, artistId, limit])
+        } ?? []
+    }
+
     func newReleases(limit: Int = 40) -> [Album] {
         read {
             try Album.order(sql: "release_date DESC").limit(limit).fetchAll($0)

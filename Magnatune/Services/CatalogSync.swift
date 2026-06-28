@@ -14,6 +14,7 @@ final class CatalogSync {
     private let fm = FileManager.default
     private let crcKey = "catalog.crc"
     private let lastCheckKey = "catalog.lastCheck"
+    private let seedSigKey = "catalog.seedSig"
 
     /// Where the live catalog db is stored in Application Support.
     static func catalogPath() -> String {
@@ -22,13 +23,28 @@ final class CatalogSync {
         return dir.appendingPathComponent("magnatune_catalog.db").path
     }
 
-    /// Ensure a catalog exists at the target path, seeding from the bundle if needed.
+    /// Ensure a catalog exists at the target path, seeding from the bundle when needed.
+    ///
+    /// Seeds on first launch, AND re-seeds whenever the app bundles a *different* catalog
+    /// (its file size — used as a cheap signature — changed) than what we last seeded. That
+    /// second case matters because the catalog content can change without the published
+    /// `changed.txt` CRC moving (e.g. recommendations were added under the same CRC): without
+    /// this, `refreshIfNeeded` sees crc == stored and never downloads, so a stale stored
+    /// catalog would survive across app updates. After re-seeding we clear the stored CRC so
+    /// the next online refresh re-evaluates against the live db (and re-pulls it if it's newer).
     func ensureSeeded() {
         let target = Self.catalogPath()
-        guard !fm.fileExists(atPath: target) else { return }
-        if let bundled = Bundle.main.url(forResource: "magnatune", withExtension: "db") {
-            try? fm.copyItem(at: bundled, to: URL(fileURLWithPath: target))
-        }
+        guard let bundled = Bundle.main.url(forResource: "magnatune", withExtension: "db") else { return }
+        let bundleSig = ((try? fm.attributesOfItem(atPath: bundled.path)[.size]) as? Int).map(String.init)
+        let lastSig = UserDefaults.standard.string(forKey: seedSigKey)
+        let haveFile = fm.fileExists(atPath: target)
+        if haveFile, bundleSig != nil, bundleSig == lastSig { return }   // up to date
+        do {
+            try? fm.removeItem(at: URL(fileURLWithPath: target))
+            try fm.copyItem(at: bundled, to: URL(fileURLWithPath: target))
+            UserDefaults.standard.set(bundleSig, forKey: seedSigKey)
+            UserDefaults.standard.removeObject(forKey: crcKey)   // re-check vs live next refresh
+        } catch { /* keep whatever is already on disk */ }
     }
 
     /// Check the CRC and refresh if changed. Throttled to once / 24h unless `force`.

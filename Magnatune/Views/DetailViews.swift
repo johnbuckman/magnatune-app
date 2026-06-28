@@ -8,6 +8,7 @@ struct ArtistDetailView: View {
     let artist: Artist
     @State private var albums: [Album] = []
     @State private var tracks: [PlayableTrack] = []
+    @State private var recommended: [Artist] = []
     @State private var showPhoto = false
     private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
 
@@ -48,6 +49,21 @@ struct ArtistDetailView: View {
                         AlbumCell(album: album, artistName: artist.name)
                     }
                 }
+                let recArtists = model.visibleArtists(recommended)
+                if !recArtists.isEmpty {
+                    Divider()
+                    Text("You might also like").font(.title2.bold())
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        LazyHStack(alignment: .top, spacing: 16) {
+                            ForEach(recArtists) { other in
+                                ArtistGridCell(artist: other)
+                                    .frame(width: coverDim(105, phone: isPhone))   // ~30% smaller than album recs (150)
+                            }
+                        }
+                        .padding(.bottom, 14)
+                        .mouseDraggableScroll()   // click-drag to scroll on Mac
+                    }
+                }
             }
             .padding()
         }
@@ -66,6 +82,7 @@ struct ArtistDetailView: View {
             albums = model.catalog?.albums(forArtist: artist.id) ?? []
             if let c = model.catalog {
                 tracks = c.makePlayable(songs: c.songs(forArtist: artist.id))
+                recommended = c.recommendedArtists(forArtist: artist.id)
             }
         }
     }
@@ -81,6 +98,8 @@ struct AlbumDetailView: View {
     @State private var artistName: String = ""
     @State private var genres: [Genre] = []
     @State private var tags: [Tag] = []
+    @State private var recommended: [Album] = []
+    @State private var recommendedNames: [Int64: String] = [:]
     @State private var showCover = false
 
     var body: some View {
@@ -152,6 +171,21 @@ struct AlbumDetailView: View {
                     SongRow(track: track) { audio.play(tracks: shown, startAt: idx) }
                     Divider()
                 }
+                let recAlbums = model.visibleAlbums(recommended)
+                if !recAlbums.isEmpty {
+                    Text("You might also like").font(.title2.bold())
+                        .padding(.top, 16)   // extra space above the heading (matches the web <br>)
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        LazyHStack(alignment: .top, spacing: 16) {
+                            ForEach(recAlbums) { rec in
+                                AlbumCell(album: rec, artistName: recommendedNames[rec.artistId] ?? "")
+                                    .frame(width: coverDim(150, phone: isPhone))
+                            }
+                        }
+                        .padding(.bottom, 14)
+                        .mouseDraggableScroll()   // click-drag to scroll on Mac
+                    }
+                }
             }
             .padding()
         }
@@ -174,6 +208,8 @@ struct AlbumDetailView: View {
         let gt = c.genresAndTags(forAlbum: album.id)
         genres = gt.genres
         tags = gt.tags
+        recommended = c.recommendedAlbums(forAlbum: album.id)
+        recommendedNames = c.artistNames()
     }
 }
 
