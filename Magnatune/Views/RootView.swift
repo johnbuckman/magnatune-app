@@ -60,7 +60,9 @@ struct RootView: View {
             // Compact (iPhone) when the width is phone-sized OR the size class is compact.
             // (Mac Catalyst always reports .regular, so the width check drives the
             // iPhone-sized preview window; real iPhones also hit the size-class check.)
-            let compact = hSizeClass == .compact || geo.size.width < 600
+            // 700, not 600: the regular layout's player controls overflow the right
+            // edge around ~640pt, so switch to the compact layout before that.
+            let compact = hSizeClass == .compact || geo.size.width < 700
             Group {
                 if compact { compactLayout } else { regularLayout }
             }
@@ -144,7 +146,14 @@ struct RootView: View {
                 .zIndex(1)
             VStack(spacing: 0) {
                 mainNavStack.frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Match the web app's perfect 12px gutters around the player.
+                // Player card insets are internally 10 (right/bottom) and the gap to
+                // the sidebar is 8 (sidebar .trailing) + 10 (player .leading) = 18.
+                // So: +2 bottom & +2 trailing → 12; -6 leading → 12 gap. All 12pt.
                 MiniPlayer(onExpand: { showNowPlaying = true })
+                    .padding(.bottom, 2)
+                    .padding(.trailing, 2)
+                    .padding(.leading, -6)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemBackground))
