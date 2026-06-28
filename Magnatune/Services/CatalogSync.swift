@@ -1,15 +1,20 @@
 import Foundation
+import GRDB
 
 /// Downloads and refreshes the catalog SQLite database.
 ///
-/// Flow: GET magnatune.com/info/changed.txt (a CRC). If it differs from the stored
-/// value (or no catalog exists yet), download sqlite_normalized.db.gz, gunzip, and
-/// atomically replace the on-disk catalog. A seed copy is bundled so the app is
-/// usable offline on first launch.
+/// Flow: GET he3.magnatune.com/info/changed.txt (a CRC). If it differs from the
+/// stored value (or no catalog exists yet), download sqlite_normalized.sql.gz —
+/// a gzipped SQL dump, ~70% smaller on the wire than the uncompressed .db it
+/// replaced — gunzip it, run the SQL into a fresh empty database to rebuild an
+/// identical catalog, then atomically replace the on-disk catalog. A seed copy is
+/// bundled so the app is usable offline on first launch.
 final class CatalogSync {
     static let changedURL = URL(string: "http://he3.magnatune.com/info/changed.txt")!
-    // Plain (uncompressed) db avoids needing a gunzip step; ~7MB on refresh.
-    static let dbURL = URL(string: "http://he3.magnatune.com/info/sqlite_normalized.db")!
+    /// Gzipped SQL `.dump` of the catalog. Smaller than the .db/.db.gz because it
+    /// carries no index b-trees or page padding — we rebuild an identical sqlite
+    /// locally by running the dump into an empty database.
+    static let sqlDumpURL = URL(string: "http://he3.magnatune.com/info/sqlite_normalized.sql.gz")!
 
     private let fm = FileManager.default
     private let crcKey = "catalog.crc"
@@ -88,20 +93,67 @@ final class CatalogSync {
 
     private func downloadAndInstall() async -> Bool {
         do {
-            let (tmp, _) = try await URLSession.shared.download(from: Self.dbURL)
-            let raw = try Data(contentsOf: tmp)
+            let (tmp, _) = try await URLSession.shared.download(from: Self.sqlDumpURL)
+            let gz = try Data(contentsOf: tmp)
+            let sqlData = try Self.gunzip(gz)
+            guard let sql = String(data: sqlData, encoding: .utf8) else { return false }
+
             let target = URL(fileURLWithPath: Self.catalogPath())
             let staging = target.deletingLastPathComponent().appendingPathComponent("catalog_new.db")
-            try? fm.removeItem(at: staging)
-            try raw.write(to: staging)
-            // basic sanity check: SQLite header
-            if raw.count < 100 || !raw.prefix(15).elementsEqual(Array("SQLite format 3".utf8)) {
+            // clear the staging db and any stale sidecar files from a prior failed run
+            for ext in ["", "-wal", "-shm", "-journal"] {
+                try? fm.removeItem(at: URL(fileURLWithPath: staging.path + ext))
+            }
+
+            // Rebuild a fresh sqlite by running the SQL dump into an empty db. The
+            // dump carries its own BEGIN/COMMIT, so run it WITHOUT a GRDB-managed
+            // transaction (otherwise the dump's BEGIN errors as a nested txn).
+            let albumCount = try Self.buildDatabase(at: staging, fromSQL: sql)
+            guard albumCount > 0 else {                 // sanity check the rebuild
                 try? fm.removeItem(at: staging); return false
             }
+
             _ = try? fm.replaceItemAt(target, withItemAt: staging)
             return true
         } catch {
             return false
         }
     }
+
+    /// Build a SQLite database at `url` by running a SQL `.dump` script into it.
+    /// Returns the album count as a cheap sanity check. The queue is released when
+    /// this returns, closing the file so it can be atomically moved into place.
+    private static func buildDatabase(at url: URL, fromSQL sql: String) throws -> Int {
+        let queue = try DatabaseQueue(path: url.path)
+        try queue.writeWithoutTransaction { db in
+            try db.execute(sql: sql)
+        }
+        return try queue.read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) FROM albums") ?? 0
+        }
+    }
+
+    /// Inflate a gzip (RFC 1952) blob. Apple's `.zlib` decompressor consumes a
+    /// raw DEFLATE stream, so strip the gzip header (incl. optional fields) and
+    /// the 8-byte CRC/size trailer first.
+    static func gunzip(_ data: Data) throws -> Data {
+        let b = [UInt8](data)
+        guard b.count > 18, b[0] == 0x1f, b[1] == 0x8b, b[2] == 0x08 else {
+            throw GunzipError.notGzip
+        }
+        let flg = b[3]
+        var i = 10
+        if flg & 0x04 != 0 {                                   // FEXTRA
+            guard i + 2 <= b.count else { throw GunzipError.truncated }
+            i += 2 + (Int(b[i]) | (Int(b[i + 1]) << 8))
+        }
+        if flg & 0x08 != 0 { while i < b.count, b[i] != 0 { i += 1 }; i += 1 }  // FNAME
+        if flg & 0x10 != 0 { while i < b.count, b[i] != 0 { i += 1 }; i += 1 }  // FCOMMENT
+        if flg & 0x02 != 0 { i += 2 }                          // FHCRC
+        guard i + 8 <= b.count else { throw GunzipError.truncated }
+        let deflate = data.subdata(in: (data.startIndex + i) ..< (data.endIndex - 8))
+        return try (deflate as NSData).decompressed(using: .zlib) as Data
+    }
+
+    enum GunzipError: Error { case notGzip, truncated }
 }
