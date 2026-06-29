@@ -41,6 +41,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var suppressedArtistIDs: Set<Int64> = []
     @Published private(set) var suppressedAlbumIDs: Set<Int64> = []
     @Published private(set) var suppressedSongIDs: Set<Int64> = []
+    /// Disliked genres themselves (hidden from the Genres list + Popular's per-genre rows).
+    /// Their albums + songs are folded into the album/song suppression sets above so they
+    /// also vanish from the albums overview, the songs list, and playlists.
+    @Published private(set) var suppressedGenreIDs: Set<Int64> = []
+    /// Featured (catalog) playlists left with no visible songs once dislikes are hidden —
+    /// dropped from the Featured list so empty playlists don't show.
+    @Published private(set) var suppressedCatalogPlaylistIDs: Set<Int64> = []
+    /// Tags (collections) left with no visible album once dislikes are hidden — dropped
+    /// from the Tags list so empty tags don't show.
+    @Published private(set) var suppressedTagIDs: Set<Int64> = []
 
     /// Whether favorites are auto-downloaded for offline listening.
     static let autoDownloadKey = "autodownload.favorites"
@@ -415,22 +425,59 @@ final class AppModel: ObservableObject {
     func recomputeDislikeSuppression() {
         guard let c = catalog else {
             suppressedArtistIDs = []; suppressedAlbumIDs = []; suppressedSongIDs = []
+            suppressedGenreIDs = []; suppressedCatalogPlaylistIDs = []; suppressedTagIDs = []
             return
         }
-        let artists = Set(userStore.dislikeIDs(kind: "artist"))
-        let albumsDirect = Set(userStore.dislikeIDs(kind: "album"))
-        var albums = albumsDirect
+        var artists = Set(userStore.dislikeIDs(kind: "artist"))
+        let genres = Set(userStore.dislikeIDs(kind: "genre"))
+        var albums = Set(userStore.dislikeIDs(kind: "album"))
         var songs = Set(userStore.dislikeIDs(kind: "song"))
         for aid in artists {
             for al in c.albums(forArtist: aid) { albums.insert(al.id) }
-            for s in c.songs(forArtist: aid) { songs.insert(s.id) }
         }
-        for alid in albumsDirect {
+        // A disliked genre hides every album in that genre (and, below, their songs).
+        // Track the genre-hidden albums + the artists who have one, so we can also hide
+        // any artist whose *entire* catalog falls in disliked genres.
+        var genreAlbums = Set<Int64>()
+        var genreArtistCandidates = Set<Int64>()
+        for gid in genres {
+            for al in c.albums(forGenre: gid) {
+                albums.insert(al.id)
+                genreAlbums.insert(al.id)
+                genreArtistCandidates.insert(al.artistId)
+            }
+        }
+        // Hide an artist from the Artists list when every one of their albums is in a
+        // disliked genre (no remaining album to browse to).
+        for aid in genreArtistCandidates where !artists.contains(aid) {
+            let theirAlbums = c.albums(forArtist: aid)
+            if !theirAlbums.isEmpty && theirAlbums.allSatisfy({ genreAlbums.contains($0.id) }) {
+                artists.insert(aid)
+            }
+        }
+        // Every suppressed album drags its songs along, so the songs vanish from the
+        // songs list and playlists too.
+        for alid in albums {
             for s in c.songs(forAlbum: alid) { songs.insert(s.id) }
+        }
+        // A Featured (catalog) playlist with no song left after suppression is hidden.
+        var emptyPlaylists = Set<Int64>()
+        for pl in c.catalogPlaylists() {
+            let plSongs = c.songs(forCatalogPlaylist: pl.id)
+            if plSongs.allSatisfy({ songs.contains($0.id) }) { emptyPlaylists.insert(pl.id) }
+        }
+        // A tag (collection) whose every album is suppressed is hidden from the Tags list.
+        var emptyTags = Set<Int64>()
+        for tag in c.allTags() {
+            let tagAlbums = c.albums(forTag: tag.id)
+            if tagAlbums.allSatisfy({ albums.contains($0.id) }) { emptyTags.insert(tag.id) }
         }
         suppressedArtistIDs = artists
         suppressedAlbumIDs = albums
         suppressedSongIDs = songs
+        suppressedGenreIDs = genres
+        suppressedCatalogPlaylistIDs = emptyPlaylists
+        suppressedTagIDs = emptyTags
     }
 
     func refreshCatalog(force: Bool = false) async {
@@ -573,13 +620,19 @@ final class AppModel: ObservableObject {
         return r
     }
     func visibleGenres(_ genres: [Genre]) -> [Genre] {
-        isOnline ? genres : genres.filter { downloadedGenreIDs.contains($0.id) }
+        var r = isOnline ? genres : genres.filter { downloadedGenreIDs.contains($0.id) }
+        if hideDislikes { r = r.filter { !suppressedGenreIDs.contains($0.id) } }
+        return r
     }
     func visibleTags(_ tags: [Tag]) -> [Tag] {
-        isOnline ? tags : tags.filter { downloadedTagIDs.contains($0.id) }
+        var r = isOnline ? tags : tags.filter { downloadedTagIDs.contains($0.id) }
+        if hideDislikes { r = r.filter { !suppressedTagIDs.contains($0.id) } }
+        return r
     }
     func visibleCatalogPlaylists(_ playlists: [CatalogPlaylist]) -> [CatalogPlaylist] {
-        isOnline ? playlists : playlists.filter { downloadedCatalogPlaylistIDs.contains($0.id) }
+        var r = isOnline ? playlists : playlists.filter { downloadedCatalogPlaylistIDs.contains($0.id) }
+        if hideDislikes { r = r.filter { !suppressedCatalogPlaylistIDs.contains($0.id) } }
+        return r
     }
 
     // MARK: High-level playback actions

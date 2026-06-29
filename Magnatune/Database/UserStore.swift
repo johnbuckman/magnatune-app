@@ -14,6 +14,7 @@ final class UserStore: ObservableObject {
     @Published private(set) var dislikedSongIDs: Set<Int64> = []
     @Published private(set) var dislikedAlbumIDs: Set<Int64> = []
     @Published private(set) var dislikedArtistIDs: Set<Int64> = []
+    @Published private(set) var dislikedGenreIDs: Set<Int64> = []
 
     /// Every song id that appears in any user playlist (drives the add-to-playlist icon).
     @Published private(set) var playlistedSongIDs: Set<Int64> = []
@@ -134,6 +135,7 @@ final class UserStore: ObservableObject {
         dislikedSongIDs = dislikedIds(kind: "song")
         dislikedAlbumIDs = dislikedIds(kind: "album")
         dislikedArtistIDs = dislikedIds(kind: "artist")
+        dislikedGenreIDs = dislikedIds(kind: "genre")
     }
 
     private func dislikedIds(kind: String) -> Set<Int64> {
@@ -148,6 +150,7 @@ final class UserStore: ObservableObject {
         case "song": return dislikedSongIDs.contains(id)
         case "album": return dislikedAlbumIDs.contains(id)
         case "artist": return dislikedArtistIDs.contains(id)
+        case "genre": return dislikedGenreIDs.contains(id)
         default: return false
         }
     }

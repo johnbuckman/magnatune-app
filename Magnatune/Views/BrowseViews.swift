@@ -211,8 +211,24 @@ struct GenresView: View {
 
     var body: some View {
         List(model.visibleGenres(genres)) { genre in
-            NavigationLink(value: genre) {
-                Label(genre.name, systemImage: genreIcon(genre.name))
+            // IMPORTANT (recurring bug): the dislike button must NOT be nested inside a
+            // NavigationLink's label — on Mac Catalyst the system disclosure chevron is
+            // appended after the label and clips/hides the trailing button, so it
+            // "vanishes". Instead drive navigation with a hidden value-based link in the
+            // background and lay out the row (icon · name · dislike · manual chevron)
+            // on top, fully under our control. If you ever re-simplify this row, VERIFY
+            // the broken-heart still shows on every genre row.
+            ZStack {
+                NavigationLink(value: genre) { EmptyView() }.opacity(0)
+                HStack(spacing: 12) {
+                    Image(systemName: genreIcon(genre.name)).frame(width: 24)
+                    Text(genre.name)
+                    Spacer()
+                    DislikeButton(kind: "genre", id: genre.id)
+                    Image(systemName: "chevron.forward")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                }
             }
         }
         .navigationTitle("Genres")
