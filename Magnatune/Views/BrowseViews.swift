@@ -208,28 +208,30 @@ func genreIcon(_ name: String) -> String {
 struct GenresView: View {
     @EnvironmentObject var model: AppModel
     @State private var genres: [Genre] = []
+    /// Navigate to a genre. Driven by the parent's NavigationPath (RootView) so this row
+    /// needs NO NavigationLink — see the recurring-bug note below.
+    var onOpen: (Genre) -> Void
 
     var body: some View {
         List(model.visibleGenres(genres)) { genre in
-            // IMPORTANT (recurring bug): the dislike button must NOT be nested inside a
-            // NavigationLink's label — on Mac Catalyst the system disclosure chevron is
-            // appended after the label and clips/hides the trailing button, so it
-            // "vanishes". Instead drive navigation with a hidden value-based link in the
-            // background and lay out the row (icon · name · dislike · manual chevron)
-            // on top, fully under our control. If you ever re-simplify this row, VERIFY
-            // the broken-heart still shows on every genre row.
-            ZStack {
-                NavigationLink(value: genre) { EmptyView() }.opacity(0)
-                HStack(spacing: 12) {
-                    Image(systemName: genreIcon(genre.name)).frame(width: 24)
-                    Text(genre.name)
-                    Spacer()
-                    DislikeButton(kind: "genre", id: genre.id)
-                    Image(systemName: "chevron.forward")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color(uiColor: .tertiaryLabel))
-                }
+            // IMPORTANT (recurring bug — the dislike button kept "vanishing" on Mac
+            // Catalyst): do NOT use a NavigationLink for this row. Catalyst draws/reserves
+            // a trailing disclosure accessory for a List NavigationLink (even a hidden
+            // value-based one) which clips the trailing dislike button. Instead the whole
+            // row is a plain tappable HStack (onTapGesture → onOpen) with the dislike
+            // button + a manual chevron laid out under our control. If you ever reintroduce
+            // a NavigationLink here, VERIFY the broken-heart still shows on every genre row.
+            HStack(spacing: 12) {
+                Image(systemName: genreIcon(genre.name)).frame(width: 24)
+                Text(genre.name)
+                Spacer()
+                DislikeButton(kind: "genre", id: genre.id)
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color(uiColor: .tertiaryLabel))
             }
+            .contentShape(Rectangle())
+            .onTapGesture { onOpen(genre) }
         }
         .navigationTitle("Genres")
         .task { if genres.isEmpty { genres = model.catalog?.allGenres() ?? [] } }

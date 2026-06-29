@@ -377,7 +377,7 @@ struct RootView: View {
             case .popular: PopularView()
             case .artists: ArtistsView()
             case .albums: AlbumsView()
-            case .genres: GenresView()
+            case .genres: GenresView(onOpen: { path.append($0) })
             case .tags: TagsView()
             case .playlists: CatalogPlaylistsView()
             case .songs: SongsView()
