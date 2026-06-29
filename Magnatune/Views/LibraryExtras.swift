@@ -272,7 +272,8 @@ struct PlaylistsView: View {
 }
 
 /// Hashable reference to a user playlist, pushed onto the shared NavigationPath.
-struct UserPlaylistRef: Hashable { let id: Int64; let name: String }
+/// Codable so the whole NavigationPath can be saved/restored across app launches.
+struct UserPlaylistRef: Hashable, Codable { let id: Int64; let name: String }
 
 struct PlaylistDetailView: View {
     @EnvironmentObject var model: AppModel

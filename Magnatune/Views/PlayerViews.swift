@@ -144,6 +144,11 @@ struct MiniPlayer: View {
                 if !isPhone && remote == nil { volumeControl }
                 if isPhone && remote == nil { volumeButton }
                 if remote == nil { airplayPill }
+                // Repeat + shuffle toggles, left of the transport — matches the web player.
+                if remote == nil {
+                    transportToggle("repeat", on: audio.repeatEnabled) { audio.repeatEnabled.toggle() }
+                    transportToggle("shuffle", on: audio.shuffleEnabled) { audio.shuffleEnabled.toggle() }
+                }
                 transportButton("backward.fill") { transport(.prev) }.disabled(!hasTrack)
                 transportButton(playPauseIcon) { transport(.playPause) }.disabled(!hasTrack)
                 transportButton("forward.fill") { transport(.next) }.disabled(!hasTrack)
@@ -241,7 +246,9 @@ struct MiniPlayer: View {
         }
     }
 
-    /// iPhone: a volume icon that opens a vertical slider popover above the tap point.
+    /// iPhone: a volume icon that opens a horizontal slider popover. (A rotated vertical Slider
+    /// tracks drags incorrectly — the gesture space doesn't follow the rotation — so use a plain
+    /// horizontal Slider, same as the iPad control.)
     @ViewBuilder private var volumeButton: some View {
         Button { showVolumePopover = true } label: {
             Image(systemName: volumeIcon)
@@ -250,12 +257,13 @@ struct MiniPlayer: View {
         }
         .buttonStyle(.plain)
         .popover(isPresented: $showVolumePopover) {
-            Slider(value: $audio.volume, in: 0...1)
-                .frame(width: 150)
-                .rotationEffect(.degrees(-90))
-                .frame(width: 44, height: 150)
-                .padding(.vertical, 16).padding(.horizontal, 10)
-                .presentationCompactAdaptation(.popover)
+            HStack(spacing: 8) {
+                Image(systemName: "speaker.fill").font(.caption2).foregroundStyle(.secondary)
+                Slider(value: $audio.volume, in: 0...1).frame(width: 150)
+                Image(systemName: "speaker.wave.2.fill").font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .presentationCompactAdaptation(.popover)
         }
     }
 
@@ -290,6 +298,21 @@ struct MiniPlayer: View {
             Image(systemName: system)
                 .font(.subheadline)
                 .frame(width: isPhone ? 26 : 52, height: 28)   // iPhone: half width
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.accentColor, lineWidth: 1))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+    }
+
+    /// A bordered ON/OFF transport toggle (shuffle / repeat) — fills accent when on, like the
+    /// web player's shuffle button.
+    private func transportToggle(_ system: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .font(.subheadline)
+                .frame(width: isPhone ? 26 : 52, height: 28)
+                .foregroundStyle(on ? Color.white : Color.accentColor)
+                .background(RoundedRectangle(cornerRadius: 7).fill(on ? Color.accentColor : .clear))
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.accentColor, lineWidth: 1))
                 .contentShape(Rectangle())
         }
@@ -433,13 +456,19 @@ struct NowPlayingView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 44) {
+        HStack(spacing: isPhone ? 28 : 36) {
+            Button { audio.shuffleEnabled.toggle() } label: { Image(systemName: "shuffle").font(.title3) }
+                .foregroundStyle(audio.shuffleEnabled ? Color.accentColor : .secondary)
+                .disabled(remote != nil)
             Button { transport(.prev) } label: { Image(systemName: "backward.fill").font(.title) }
             Button { transport(.playPause) } label: {
                 let playing = remote != nil ? isRemotePlaying : audio.isPlaying
                 Image(systemName: playing ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 64))
             }
             Button { transport(.next) } label: { Image(systemName: "forward.fill").font(.title) }
+            Button { audio.repeatEnabled.toggle() } label: { Image(systemName: "repeat").font(.title3) }
+                .foregroundStyle(audio.repeatEnabled ? Color.accentColor : .secondary)
+                .disabled(remote != nil)
         }
         .buttonStyle(.plain)
     }

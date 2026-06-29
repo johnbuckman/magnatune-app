@@ -54,6 +54,17 @@ struct RootView: View {
     @State private var sidebarHeight: CGFloat = 800          // measured column height
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var isCompact = false                     // mirrors layout mode for sheets
+    @State private var didRestorePath = false                // one-shot guard for restoring the drill-down
+
+    private static let kSection = "nav.section"
+    private static let kPath = "nav.path"
+
+    init() {
+        // Restore the top-level page immediately (no flash of Popular). The drill-down is
+        // restored later, once the catalog is ready (see restoreNavPathIfNeeded()).
+        let saved = UserDefaults.standard.string(forKey: Self.kSection)
+        _selection = State(initialValue: SidebarItem(rawValue: saved ?? "") ?? .popular)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -75,6 +86,13 @@ struct RootView: View {
         .persistentSystemOverlays(.hidden)
         .onChange(of: path) { _, newPath in
             if newPath.isEmpty { navHighlight = nil }
+            persistPath(newPath)
+        }
+        .onChange(of: selection) { _, s in
+            UserDefaults.standard.set(s.rawValue, forKey: Self.kSection)
+        }
+        .onChange(of: model.catalogReady) { _, ready in
+            if ready { restoreNavPathIfNeeded() }
         }
         .sheet(isPresented: $showNowPlaying) {
             NowPlayingView(
@@ -94,7 +112,7 @@ struct RootView: View {
             .environmentObject(model.audio)
         }
         .background(MacWindowConfigurator())
-        .onAppear { model.startPeerSharingIfNeeded() }
+        .onAppear { model.startPeerSharingIfNeeded(); restoreNavPathIfNeeded() }
         .alert(model.localNetworkDenied ? "Local Network Access Needed" : "Find Magnatune Players Nearby",
                isPresented: $model.showLocalNetworkPrimer) {
             if model.localNetworkDenied {
@@ -328,6 +346,27 @@ struct RootView: View {
     /// state mid-navigation).
     private func highlight(_ item: SidebarItem?) {
         DispatchQueue.main.async { navHighlight = item }
+    }
+
+    /// Persist the current drill-down (encoded NavigationPath) so the app reopens on the
+    /// same page. Saved on every push/pop; the section is saved separately on change.
+    private func persistPath(_ p: NavigationPath) {
+        if let c = p.codable, let data = try? JSONEncoder().encode(c) {
+            UserDefaults.standard.set(data, forKey: Self.kPath)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.kPath)
+        }
+    }
+
+    /// Restore the saved drill-down once, after the catalog is ready (the detail views
+    /// resolve their content from it). The section was already restored in init().
+    private func restoreNavPathIfNeeded() {
+        guard !didRestorePath, model.catalogReady else { return }
+        didRestorePath = true
+        guard let data = UserDefaults.standard.data(forKey: Self.kPath),
+              let rep = try? JSONDecoder().decode(NavigationPath.CodableRepresentation.self, from: data)
+        else { return }
+        path = NavigationPath(rep)
     }
 
     @ViewBuilder private var content: some View {

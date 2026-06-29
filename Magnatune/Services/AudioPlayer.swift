@@ -28,6 +28,11 @@ final class AudioPlayer: ObservableObject {
     @Published var shuffleEnabled: Bool = UserDefaults.standard.bool(forKey: "shuffle.enabled") {
         didSet { UserDefaults.standard.set(shuffleEnabled, forKey: "shuffle.enabled") }
     }
+    /// Persistent repeat mode. When on, the queue (the last thing Play was pressed on) loops
+    /// forever. After the first pass, tracks replay from the on-device AudioCache → no network.
+    @Published var repeatEnabled: Bool = UserDefaults.standard.bool(forKey: "repeat.enabled") {
+        didSet { UserDefaults.standard.set(repeatEnabled, forKey: "repeat.enabled") }
+    }
     /// App-level output volume (0...1), persisted. Applied on top of the crossfade ramp.
     @Published var volume: Float = Float(min(1.0, max(0.0, UserDefaults.standard.object(forKey: "audio.volume") as? Double ?? 1.0))) {
         didSet {
@@ -124,7 +129,17 @@ final class AudioPlayer: ObservableObject {
 
     func next() {
         cancelCrossfade()
-        guard hasNext else { active.pause(); isPlaying = false; onPlaybackChange?(); return }
+        guard hasNext else {
+            // End of queue: loop it forever when repeat is on (tracks replay from AudioCache,
+            // so no network is used after the first pass); otherwise stop.
+            if repeatEnabled, !queue.isEmpty {
+                index = 0
+                loadCurrent(autoPlay: true)
+            } else {
+                active.pause(); isPlaying = false; onPlaybackChange?()
+            }
+            return
+        }
         index += 1
         loadCurrent(autoPlay: true)
     }
