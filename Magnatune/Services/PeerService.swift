@@ -30,10 +30,62 @@ enum PeerControl: String, Codable {
 }
 
 /// Messages exchanged over the per-peer TCP connection (newline-delimited JSON).
-enum PeerMessage: Codable {
+///
+/// IMPORTANT: this uses an explicit *flat* wire format (`{"t":"hello",…}` / `{"t":"np",…}` /
+/// `{"t":"ctl",…}`) rather than Swift's synthesized enum Codable (which nests as
+/// `{"hello":{…}}` / `{"nowPlaying":{"_0":{…}}}`). The flat form is language-neutral so the
+/// Android port (org.json, flat keys) interoperates — the synthesized form does not.
+enum PeerMessage {
     case hello(id: String, name: String, platform: String)
     case nowPlaying(PeerNowPlaying)
     case control(PeerControl)
+}
+
+extension PeerMessage: Codable {
+    private enum K: String, CodingKey { case t, id, name, platform, state, songID, position, startedAt, cmd }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: K.self)
+        switch self {
+        case let .hello(id, name, platform):
+            try c.encode("hello", forKey: .t)
+            try c.encode(id, forKey: .id)
+            try c.encode(name, forKey: .name)
+            try c.encode(platform, forKey: .platform)
+        case let .nowPlaying(np):
+            try c.encode("np", forKey: .t)
+            try c.encode(np.state.rawValue, forKey: .state)
+            try c.encodeIfPresent(np.songID, forKey: .songID)
+            try c.encode(np.position, forKey: .position)
+            // Wall-clock ms since epoch, matching Android's System.currentTimeMillis().
+            if let s = np.startedAt { try c.encode(Int64(s.timeIntervalSince1970 * 1000), forKey: .startedAt) }
+        case let .control(cmd):
+            try c.encode("ctl", forKey: .t)
+            try c.encode(cmd.rawValue, forKey: .cmd)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        switch try c.decode(String.self, forKey: .t) {
+        case "hello":
+            self = .hello(id: try c.decode(String.self, forKey: .id),
+                          name: try c.decodeIfPresent(String.self, forKey: .name) ?? "Magnatune",
+                          platform: try c.decodeIfPresent(String.self, forKey: .platform) ?? "")
+        case "np":
+            let state = PeerPlaybackState(rawValue: try c.decodeIfPresent(String.self, forKey: .state) ?? "idle") ?? .idle
+            let songID = try c.decodeIfPresent(Int64.self, forKey: .songID)
+            let position = try c.decodeIfPresent(Double.self, forKey: .position) ?? 0
+            let startedAt = (try c.decodeIfPresent(Int64.self, forKey: .startedAt))
+                .map { Date(timeIntervalSince1970: Double($0) / 1000) }
+            self = .nowPlaying(PeerNowPlaying(state: state, songID: songID, position: position, startedAt: startedAt))
+        case "ctl":
+            self = .control(PeerControl(rawValue: try c.decode(String.self, forKey: .cmd)) ?? .playPause)
+        case let other:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                    debugDescription: "unknown peer message type \(other)"))
+        }
+    }
 }
 
 /// A discovered peer instance, as published to the UI.
