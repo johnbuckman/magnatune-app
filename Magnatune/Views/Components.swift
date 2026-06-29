@@ -230,9 +230,18 @@ struct SearchField: View {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             field
             if !text.isEmpty {
-                Button { text = "" } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }.buttonStyle(.plain)
+                // Use .onTapGesture, NOT a Button: on Mac Catalyst a Button adjacent to a
+                // first-responder TextField has its tap swallowed (the click resigns the field
+                // instead of firing the action), so the clear button did nothing. A tap gesture
+                // recognizer fires regardless. Generous hit area; keep focus so typing continues.
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        text = ""
+                        focused?.wrappedValue = true
+                    }
             }
         }
         .padding(9)
@@ -441,19 +450,42 @@ struct SongRow: View {
     let track: PlayableTrack
     var showArtwork = false
     var hPad: CGFloat = 6     // horizontal inset (0 in search so artwork aligns with the list rows)
+    /// Briefly flash-highlighted (e.g. the song just deep-linked from search).
+    var isHighlighted = false
+    /// Search-nav mode: when set, tapping the artwork / song name / album chip navigates to
+    /// the album with this song highlighted (instead of playing the row inline).
+    var albumSong: AlbumSong? = nil
+    /// Artist for the search-row artist chip (links to the artist page).
+    var artistForChip: Artist? = nil
     var onPlay: () -> Void
 
     private var isCurrent: Bool { audio.current?.id == track.id }
+    private var navMode: Bool { albumSong != nil }
 
     var body: some View {
-        HStack(spacing: 10) {
+        let row = HStack(spacing: 10) {
             leading
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.song.name).lineLimit(1)
-                    .fontWeight(isCurrent ? .semibold : .regular)
-                    .foregroundStyle(isCurrent ? Color.accentColor : .primary)
+                if let target = albumSong {
+                    NavigationLink(value: target) { songName }.buttonStyle(.plain)
+                } else {
+                    songName
+                }
                 if showArtwork {
-                    Text("\(track.artistName) — \(track.album.name)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if navMode {
+                        // Tappable chips under the song name: artist → artist page,
+                        // album → album page (with this song highlighted). Web parity.
+                        HStack(spacing: 6) {
+                            if let a = artistForChip {
+                                NavigationLink(value: a) { chip(a.name, "person") }.buttonStyle(.plain)
+                            }
+                            if let target = albumSong {
+                                NavigationLink(value: target) { chip(track.album.name, "opticaldisc") }.buttonStyle(.plain)
+                            }
+                        }
+                    } else {
+                        Text("\(track.artistName) — \(track.album.name)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
             }
             Spacer()
@@ -463,10 +495,32 @@ struct SongRow: View {
             AddToPlaylistButton { [track.song.id] }
         }
         .padding(.vertical, 3).padding(.horizontal, hPad)
-        .background(RoundedRectangle(cornerRadius: 6).fill(isCurrent ? Color.accentColor.opacity(0.12) : .clear))
+        .background(RoundedRectangle(cornerRadius: 6).fill(rowFill))
         .contentShape(Rectangle())
-        .onTapGesture(perform: onPlay)
         .contextMenu { AddToPlaylistMenu(songID: track.song.id) }
+        // Only the play-on-tap rows (album page, favorites, playlists) get the tap gesture;
+        // in search-nav mode the artwork / name / chips are their own NavigationLinks.
+        if navMode { row } else { row.onTapGesture(perform: onPlay) }
+    }
+
+    private var rowFill: Color {
+        if isCurrent { return Color.accentColor.opacity(0.12) }
+        if isHighlighted { return Color.accentColor.opacity(0.28) }
+        return .clear
+    }
+
+    private var songName: some View {
+        Text(track.song.name).lineLimit(1)
+            .fontWeight(isCurrent ? .semibold : .regular)
+            .foregroundStyle(isCurrent ? Color.accentColor : .primary)
+    }
+
+    private func chip(_ text: String, _ symbol: String) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.caption).lineLimit(1)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder private var leading: some View {
@@ -476,8 +530,13 @@ struct SongRow: View {
                 .foregroundStyle(Color.accentColor)
                 .frame(width: showArtwork ? art : 26)
         } else if showArtwork {
-            CoverImage(artistName: track.artistName, albumName: track.album.name, points: 40)
+            let cover = CoverImage(artistName: track.artistName, albumName: track.album.name, points: 40)
                 .frame(width: art, height: art)
+            if let target = albumSong {
+                NavigationLink(value: target) { cover }.buttonStyle(.plain)
+            } else {
+                cover
+            }
         } else if let n = track.song.trackNo {
             Text("\(n)").font(.callout.monospacedDigit()).foregroundStyle(.secondary).frame(width: 26, alignment: .trailing)
         } else {

@@ -12,10 +12,11 @@ struct Artist: Identifiable, Codable, Hashable, FetchableRecord, TableRecord {
     var bio: String?
     var photo: String?
     var society: String?
+    var page: String?          // artist URL slug (e.g. "beth_quist"); optional → safe pre/post catalog regen
 
     enum CodingKeys: String, CodingKey {
         case id = "artists_id"
-        case name, description, homepage, bio, photo, society
+        case name, description, homepage, bio, photo, society, page
     }
 }
 
@@ -103,4 +104,11 @@ struct PlayableTrack: Identifiable, Hashable {
     var album: Album
     var artistName: String
     var id: Int64 { song.id }
+}
+
+/// Navigation target: open an album's detail page and scroll-to / highlight one song
+/// (used when tapping a song in search results). Distinct from navigating to the bare Album.
+struct AlbumSong: Hashable {
+    var album: Album
+    var songID: Int64
 }

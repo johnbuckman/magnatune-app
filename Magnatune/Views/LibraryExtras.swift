@@ -72,7 +72,11 @@ struct SearchView: View {
                     if !vSongs.isEmpty {
                         Section("Songs") {
                             ForEach(Array(vSongs.enumerated()), id: \.element.id) { idx, t in
-                                SongRow(track: t, showArtwork: true, hPad: 0) { model.audio.play(tracks: vSongs, startAt: idx) }
+                                // Tapping the artwork / song name / album chip opens the album with
+                                // this song highlighted (no inline play); artist chip → artist.
+                                SongRow(track: t, showArtwork: true, hPad: 0,
+                                        albumSong: AlbumSong(album: t.album, songID: t.id),
+                                        artistForChip: model.catalog?.artist(id: t.album.artistId)) { }
                                     .listRowInsets(rowInsets)
                             }
                         }

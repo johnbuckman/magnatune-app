@@ -110,6 +110,8 @@ struct AlbumDetailView: View {
     @EnvironmentObject var audio: AudioPlayer
     @Environment(\.isPhoneLayout) private var isPhone
     let album: Album
+    /// When set (arriving from a search result), scroll to this song and briefly highlight it.
+    var highlightSongID: Int64? = nil
     @State private var tracks: [PlayableTrack] = []
     @State private var artist: Artist?
     @State private var artistName: String = ""
@@ -118,9 +120,11 @@ struct AlbumDetailView: View {
     @State private var recommended: [Album] = []
     @State private var recommendedNames: [Int64: String] = [:]
     @State private var showCover = false
+    @State private var highlightedID: Int64?
 
     var body: some View {
         let shown = model.visibleTracks(tracks)
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 16) {
@@ -177,7 +181,8 @@ struct AlbumDetailView: View {
                 }
                 Divider()
                 ForEach(Array(shown.enumerated()), id: \.element.id) { idx, track in
-                    SongRow(track: track) { audio.play(tracks: shown, startAt: idx) }
+                    SongRow(track: track, isHighlighted: highlightedID == track.id) { audio.play(tracks: shown, startAt: idx) }
+                        .id(track.id)
                     Divider()
                 }
                 let recAlbums = model.visibleAlbums(recommended)
@@ -206,7 +211,18 @@ struct AlbumDetailView: View {
                 url: URLBuilder.coverURL(artistName: artistName, albumName: album.name, size: 1400),
                 placeholderURL: URLBuilder.coverURL(artistName: artistName, albumName: album.name, size: 600))
         }
-        .task { load() }
+        .task {
+            load()
+            // Deep-linked from a search result: scroll the song into view and flash-highlight
+            // it. Does NOT auto-play. Brief delay so the song rows have laid out first.
+            guard let h = highlightSongID else { return }
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            withAnimation { proxy.scrollTo(h, anchor: .center) }
+            withAnimation { highlightedID = h }
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            withAnimation { highlightedID = nil }
+        }
+        }
     }
 
     private func load() {

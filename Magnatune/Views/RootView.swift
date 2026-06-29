@@ -140,6 +140,7 @@ struct RootView: View {
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: Artist.self) { ArtistDetailView(artist: $0).onAppear { highlight(.artists) } }
                 .navigationDestination(for: Album.self) { AlbumDetailView(album: $0).onAppear { highlight(nil) } }
+                .navigationDestination(for: AlbumSong.self) { AlbumDetailView(album: $0.album, highlightSongID: $0.songID).onAppear { highlight(nil) } }
                 .navigationDestination(for: Genre.self) { GenreArtistsView(genre: $0).onAppear { highlight(.genres) } }
                 .navigationDestination(for: Tag.self) { TagAlbumsView(tag: $0).onAppear { highlight(.tags) } }
                 .navigationDestination(for: CatalogPlaylist.self) { CatalogPlaylistDetailView(playlist: $0).onAppear { highlight(nil) } }
