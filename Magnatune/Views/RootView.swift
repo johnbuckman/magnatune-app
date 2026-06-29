@@ -3,7 +3,7 @@ import SwiftUI
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     case popular, artists, albums, genres, tags, playlists, songs
     case favorites, myPlaylists
-    case search, settings
+    case search, settings, help
 
     var id: String { rawValue }
 
@@ -20,6 +20,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .myPlaylists: return "Playlists"
         case .search: return "Search"
         case .settings: return "Settings"
+        case .help: return "Help"
         }
     }
 
@@ -36,6 +37,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .myPlaylists: return "music.note.list"
         case .search: return "magnifyingglass"
         case .settings: return "gear"
+        case .help: return "questionmark.circle"
         }
     }
 
@@ -282,12 +284,18 @@ struct RootView: View {
                 // Hidden on iPhone (the sidebar can appear in Max landscape).
                 if UIDevice.current.userInterfaceIdiom != .phone {
                     let mh = sidebarHeight * 0.10
-                    BrandImage(name: "magnatune_mascot")
-                        .frame(width: mh * (1000.0 / 392.0), height: mh)  // aspect-correct
-                        .frame(maxWidth: .infinity)                        // center in column
-                        .clipped()                                         // clip L/R at edges
-                        .offset(y: -(mh * 371.0 / 392.0) - 6)              // line at block top (mascot nudged 6px down)
-                        .allowsHitTesting(false)
+                    // Tap the mascot to open in-app help. contentShape is on the
+                    // mascot-width frame (before the centering frame) so only the
+                    // visible mascot is tappable, not the full-width column strip.
+                    Button { showHelp() } label: {
+                        BrandImage(name: "magnatune_mascot")
+                            .frame(width: mh * (1000.0 / 392.0), height: mh)  // aspect-correct
+                            .contentShape(Rectangle())
+                            .frame(maxWidth: .infinity)                        // center in column
+                            .clipped()                                         // clip L/R at edges
+                    }
+                    .buttonStyle(.plain)
+                    .offset(y: -(mh * 371.0 / 392.0) - 6)              // line at block top (mascot nudged 6px down)
                 }
             }
         }
@@ -342,6 +350,14 @@ struct RootView: View {
         return .primary
     }
 
+    /// Show the Help page in the content area, like selecting any sidebar section.
+    /// Used by both the mascot tap and Settings → "App Help".
+    private func showHelp() {
+        navHighlight = nil
+        selection = .help
+        path = NavigationPath()
+    }
+
     /// Update the sidebar highlight after the push settles (deferred to avoid mutating
     /// state mid-navigation).
     private func highlight(_ item: SidebarItem?) {
@@ -384,7 +400,12 @@ struct RootView: View {
             case .favorites: FavoritesView()
             case .myPlaylists: PlaylistsView()
             case .search: SearchView()
-            case .settings: SettingsView()
+            case .settings: SettingsView(onShowHelp: { showHelp() })
+            case .help: HelpView(onNavigate: { item in
+                navHighlight = nil
+                selection = item
+                path = NavigationPath()
+            })
             }
         }
     }

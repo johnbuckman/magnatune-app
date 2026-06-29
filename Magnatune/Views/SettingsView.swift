@@ -2,6 +2,8 @@ import SwiftUI
 import Kingfisher
 
 struct SettingsView: View {
+    /// Navigates to the Help page in the content area (provided by RootView).
+    var onShowHelp: () -> Void = {}
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var creds: Credentials
     @State private var username = ""
@@ -235,6 +237,11 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Why we are not evil") { showWhyNotEvil = true }
                 Button("Founder's Rant") { showFoundersRant = true }
+                Button {
+                    onShowHelp()
+                } label: {
+                    Label("App Help", systemImage: "questionmark.circle")
+                }
             }
         }
         .formStyle(.grouped)
@@ -387,3 +394,154 @@ If you think Magnatune is a worthy goal, please support it. There are powerful f
 
 Magnatune was founded in April 2003, and is located in the People's Republic of Berkeley, California.
 """
+
+// MARK: - In-app help (what Magnatune is, how the player works, every feature)
+
+/// One block of help content — either a paragraph or a bulleted point.
+/// Bullet/paragraph text accepts simple markdown (e.g. **bold**).
+enum HelpBlock {
+    case text(String)
+    case bullet(String)
+}
+
+struct HelpSection: Identifiable {
+    let id = UUID()
+    let title: String
+    let blocks: [HelpBlock]
+}
+
+/// The Help page, shown in the main content area like any other section. Opened by
+/// tapping the mascot in the sidebar or Settings → "App Help". Bolded section names in
+/// the text are rendered as tappable links that jump to that section (see linkifyHelp).
+struct HelpView: View {
+    var onNavigate: (SidebarItem) -> Void = { _ in }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                ForEach(helpSections) { section in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(section.title).font(.title2.bold())
+                        ForEach(section.blocks.indices, id: \.self) { i in
+                            blockView(section.blocks[i])
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: 820, alignment: .leading)   // comfortable reading measure
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+        }
+        .navigationTitle("Help")
+        // Intercept the in-text "mag:<section>" links and navigate instead of opening a URL.
+        .environment(\.openURL, OpenURLAction { url in
+            if url.scheme == "mag" {
+                if let item = SidebarItem(rawValue: String(url.absoluteString.dropFirst(4))) { onNavigate(item) }
+                return .handled
+            }
+            return .systemAction
+        })
+    }
+
+    @ViewBuilder private func blockView(_ block: HelpBlock) -> some View {
+        switch block {
+        case .text(let s):
+            Text(.init(linkifyHelp(s)))
+                .font(.system(size: 18))
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+        case .bullet(let s):
+            HStack(alignment: .top, spacing: 10) {
+                Text("•").font(.system(size: 18)).bold()
+                Text(.init(linkifyHelp(s)))
+                    .font(.system(size: 18))
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// Bolded words that name a navigable section → which section they open.
+/// (.playlists is titled "Featured"; .myPlaylists is titled "Playlists".)
+private let helpLinkMap: [String: SidebarItem] = [
+    "Popular": .popular, "Artists": .artists, "Albums": .albums, "Songs": .songs,
+    "Genres": .genres, "Tags": .tags, "Featured": .playlists, "Search": .search,
+    "Favorites": .favorites, "Playlists": .myPlaylists, "Settings": .settings,
+]
+
+/// Turn `**Section**` into a markdown link `[Section](mag:rawValue)` so it's tappable;
+/// other `**bold**` terms (Play, Shuffle, AirPlay, …) are left as plain bold.
+private func linkifyHelp(_ s: String) -> String {
+    var out = s
+    for (word, item) in helpLinkMap {
+        out = out.replacingOccurrences(of: "**\(word)**", with: "[\(word)](mag:\(item.rawValue))")
+    }
+    return out
+}
+
+let helpSections: [HelpSection] = [
+    HelpSection(title: "Welcome to Magnatune", blocks: [
+        .text("Magnatune is an independent record label founded in 2003 on a simple idea: be fair to musicians and fair to listeners. Our motto is \u{201C}we are not evil.\u{201D}"),
+        .text("Every album is hand-picked — we accept about 3% of submissions — and you can listen to everything in full before you decide to buy. When you do buy, half the money goes straight to the artist. All the music is Creative Commons licensed, with no copy protection (DRM)."),
+        .text("This app streams Magnatune's entire catalog: hundreds of artists across classical, jazz, electronica, rock, ambient, world and more."),
+    ]),
+    HelpSection(title: "Finding your way around", blocks: [
+        .text("On a Mac or iPad the sections live in the sidebar on the left. On iPhone they're split between a bar at the top (for browsing) and a bar at the bottom."),
+        .bullet("**Popular** — the most-loved albums, grouped by genre."),
+        .bullet("**Artists**, **Albums**, **Songs** — browse the whole catalog."),
+        .bullet("**Genres** — pick a style, then drill into its artists and albums."),
+        .bullet("**Tags** — albums grouped by mood and theme (\u{201C}Tagged as\u{2026}\u{201D})."),
+        .bullet("**Featured** — playlists hand-curated by Magnatune."),
+        .bullet("**Search** — find any artist, album or song by name."),
+        .bullet("**Favorites**, **Playlists**, **Settings** — your own music and options."),
+    ]),
+    HelpSection(title: "Browsing music", blocks: [
+        .text("Tap any artist, album or genre to open it. Album pages list every track; artist pages list their albums."),
+        .bullet("Tap album art or an artist photo to see it full-screen — pinch to zoom."),
+        .bullet("At the bottom of an album or artist page you'll find **\u{201C}You might also like\u{201D}** — related music chosen for you."),
+        .bullet("Genre and tag chips on a detail page are tappable, taking you to everything in that genre or tag."),
+    ]),
+    HelpSection(title: "Playing music", blocks: [
+        .text("Tap a song to play it. The **Play** button on an album or artist plays the whole thing; turn on **Shuffle** to mix up the order."),
+        .text("The mini-player sits at the bottom (Mac/iPad) or above the tab bar (iPhone). Tap it to open the full **Now Playing** screen — there you can tap the art, song or album to jump to that album, or the artist name to open the artist."),
+        .bullet("**Play / Pause**, **Previous**, **Next** — the usual transport controls."),
+        .bullet("**Shuffle** plays the queue in random order. **Repeat** loops the queue forever once it reaches the end."),
+        .bullet("Drag the progress bar to skip to any point in a track."),
+        .bullet("**Volume** — a slider on Mac/iPad, or the speaker button on iPhone."),
+        .bullet("**Crossfade** smoothly fades each track into the next. Turn it on or off, and set its length, in **Settings**."),
+        .bullet("**AirPlay** — tap the AirPlay button (the output pill next to the volume control) to play through AirPlay speakers, a HomePod, an Apple TV, or any AirPlay-compatible device on your network. The pill shows the current output and highlights when you're playing to an external device."),
+        .bullet("Playback also works from the lock screen, Control Center and your keyboard's media keys, and keeps going in the background."),
+    ]),
+    HelpSection(title: "Favorites & dislikes", blocks: [
+        .text("Use the heart and broken-heart icons that appear next to every song, album and artist."),
+        .bullet("**Heart** — add to your Favorites. Everything you favorite lives under **Favorites**."),
+        .bullet("**Broken heart** — mark something you'd rather not see. With **Hide things I dislike** on (**Settings**), disliked music disappears everywhere; turn it off to bring it back."),
+    ]),
+    HelpSection(title: "Your playlists", blocks: [
+        .text("Build your own playlists under **Playlists**."),
+        .bullet("Tap the **add-to-playlist** button next to any heart to add a song, a whole album, or an artist's entire catalog — or to create a new playlist on the spot."),
+        .bullet("Inside a playlist you can reorder tracks, remove them, or delete the playlist."),
+    ]),
+    HelpSection(title: "Membership & sound quality", blocks: [
+        .text("You can stream everything for free. Free streams include a short spoken announcement at the end of each track."),
+        .text("A Magnatune membership removes the announcement, unlocks higher-quality audio, and lets you download music. Sign in under **Settings** → Magnatune Membership."),
+        .bullet("Members can choose **Normal** or **Lossless** audio quality in **Settings**."),
+    ]),
+    HelpSection(title: "Offline listening", blocks: [
+        .text("Members can keep music on the device to play without a connection."),
+        .bullet("**Auto-download favorites** (**Settings**) saves every song, album and artist you favorite, automatically. When you're offline, the app shows just your downloaded music."),
+        .bullet("Tracks you play are also cached automatically so they don't re-download. See and clear storage under **Settings** → Storage."),
+        .bullet("The download buttons on albums and songs (members only) save music in your chosen format via your browser."),
+    ]),
+    HelpSection(title: "Listening across your devices", blocks: [
+        .text("If you run Magnatune on more than one device on the same Wi-Fi, they can see each other."),
+        .bullet("With **Share & control on local network** on, when you're not playing here the player shows what's playing on another device — and its buttons control that device."),
+        .bullet("**Auto-stop other music** pauses your other Magnatune apps when you start playing here (both devices need it on)."),
+    ]),
+    HelpSection(title: "Settings & storage", blocks: [
+        .text("Everything above is configurable under **Settings**: membership, playback, audio quality, downloads, local network, dislikes and storage. The catalog updates itself automatically in the background."),
+        .text("Tap **Why we are not evil** or **Founder's Rant** in **Settings** to learn more about what Magnatune stands for."),
+        .text("Enjoy the music — and thanks for supporting independent artists."),
+    ]),
+]

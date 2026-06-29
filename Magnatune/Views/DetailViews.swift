@@ -9,6 +9,8 @@ struct ArtistDetailView: View {
     @State private var albums: [Album] = []
     @State private var tracks: [PlayableTrack] = []
     @State private var recommended: [Artist] = []
+    @State private var genres: [Genre] = []
+    @State private var tags: [Tag] = []
     @State private var showPhoto = false
     private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
 
@@ -41,6 +43,18 @@ struct ArtistDetailView: View {
                 }
                 if let bio = artist.bio ?? artist.description, !bio.isEmpty {
                     ExpandableText(text: bio)
+                }
+                if !genres.isEmpty || !tags.isEmpty {
+                    FlowLayout(spacing: 8) {
+                        ForEach(genres) { g in
+                            NavigationLink(value: g) { ChipLabel(text: g.name, prominent: true) }
+                                .buttonStyle(.plain)
+                        }
+                        ForEach(tags) { tag in
+                            NavigationLink(value: tag) { ChipLabel(text: tag.name) }
+                                .buttonStyle(.plain)
+                        }
+                    }
                 }
                 Divider()
                 Text("Albums").font(.title2.bold())
@@ -83,6 +97,9 @@ struct ArtistDetailView: View {
             if let c = model.catalog {
                 tracks = c.makePlayable(songs: c.songs(forArtist: artist.id))
                 recommended = c.recommendedArtists(forArtist: artist.id)
+                let gt = c.genresAndTags(forArtist: artist.id)
+                genres = gt.genres
+                tags = gt.tags
             }
         }
     }

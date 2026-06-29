@@ -22,6 +22,32 @@ final class CatalogStore {
         read { try Artist.order(sql: "name COLLATE NOCASE").fetchAll($0) } ?? []
     }
 
+    /// All artists ordered by their newest album's release date (newest first).
+    /// Artists have no date of their own, so we sort by MAX(album.release_date).
+    func artistsByRecent() -> [Artist] {
+        read { db in
+            try Artist.fetchAll(db, sql: """
+                SELECT ar.* FROM artists ar
+                LEFT JOIN albums a ON a.artist_id = ar.artists_id
+                GROUP BY ar.artists_id
+                ORDER BY MAX(a.release_date) DESC, ar.name COLLATE NOCASE
+                """)
+        } ?? []
+    }
+
+    /// All artists ordered by their most-popular album (highest first).
+    /// Artists have no popularity of their own, so we sort by MAX(album.popularity).
+    func artistsByPopularity() -> [Artist] {
+        read { db in
+            try Artist.fetchAll(db, sql: """
+                SELECT ar.* FROM artists ar
+                LEFT JOIN albums a ON a.artist_id = ar.artists_id
+                GROUP BY ar.artists_id
+                ORDER BY MAX(a.popularity) DESC, ar.name COLLATE NOCASE
+                """)
+        } ?? []
+    }
+
     func artist(id: Int64) -> Artist? {
         read { try Artist.fetchOne($0, key: id) } ?? nil
     }
@@ -106,6 +132,11 @@ final class CatalogStore {
     /// All albums ordered most-popular first.
     func albumsByPopularity() -> [Album] {
         read { try Album.order(sql: "popularity DESC, name COLLATE NOCASE").fetchAll($0) } ?? []
+    }
+
+    /// All albums ordered by newest release date first.
+    func albumsByRecent() -> [Album] {
+        read { try Album.order(sql: "release_date DESC, name COLLATE NOCASE").fetchAll($0) } ?? []
     }
 
     // MARK: Songs
@@ -201,6 +232,28 @@ final class CatalogStore {
                 SELECT c.* FROM collections c JOIN collections_albums ca ON ca.collection_id = c.collections_id
                 WHERE ca.album_id = ? ORDER BY c.name COLLATE NOCASE
                 """, arguments: [albumId])
+        } ?? []
+        return (genres, tags)
+    }
+
+    /// The genres + tags (collections) for an artist, aggregated across all of the artist's albums.
+    /// Shown as chips on the artist page, the same way as on an album page.
+    func genresAndTags(forArtist artistId: Int64) -> (genres: [Genre], tags: [Tag]) {
+        let genres = read { db in
+            try Genre.fetchAll(db, sql: """
+                SELECT DISTINCT g.* FROM genres g
+                JOIN genres_albums ga ON ga.genre_id = g.genre_id
+                JOIN albums a ON a.album_id = ga.album_id
+                WHERE a.artist_id = ? ORDER BY g.name COLLATE NOCASE
+                """, arguments: [artistId])
+        } ?? []
+        let tags = read { db in
+            try Tag.fetchAll(db, sql: """
+                SELECT DISTINCT c.* FROM collections c
+                JOIN collections_albums ca ON ca.collection_id = c.collections_id
+                JOIN albums a ON a.album_id = ca.album_id
+                WHERE a.artist_id = ? ORDER BY c.name COLLATE NOCASE
+                """, arguments: [artistId])
         } ?? []
         return (genres, tags)
     }

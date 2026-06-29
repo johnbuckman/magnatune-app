@@ -1,5 +1,59 @@
 import SwiftUI
 
+// MARK: - Browse sort
+
+/// Sort order for the Albums and Artists browse lists, shown as a menu beside the filter box.
+enum BrowseSort: String, CaseIterable, Identifiable {
+    case popular, alphabetical, recent   // segmented-control order: Popular · Alphabetical · Date
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .popular: return "Popular"
+        case .alphabetical: return "Alphabetical"
+        case .recent: return "Date"
+        }
+    }
+}
+
+/// Sort control placed to the right of a `SearchField` — a segmented control showing all three
+/// choices at once.
+struct SortMenu: View {
+    @Binding var sort: BrowseSort
+    @Environment(\.isPhoneLayout) private var isPhone
+    var body: some View {
+        // Narrow / portrait: a compact pull-down menu so it doesn't squeeze the filter box.
+        // Wide: the all-choices-visible segmented control.
+        if isPhone {
+            Menu {
+                // List the three choices directly (no nested "Sort" submenu).
+                ForEach(BrowseSort.allCases) { opt in
+                    Button { sort = opt } label: {
+                        if sort == opt {
+                            Label(opt.label, systemImage: "checkmark")
+                        } else {
+                            Text(opt.label)
+                        }
+                    }
+                }
+            } label: {
+                Label(sort.label, systemImage: "arrow.up.arrow.down")
+                    .labelStyle(.titleAndIcon)
+                    .font(.callout)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .fixedSize()
+        } else {
+            Picker("Sort", selection: $sort) {
+                ForEach(BrowseSort.allCases) { Text($0.label).tag($0) }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .fixedSize()
+        }
+    }
+}
+
 // MARK: - Popular (albums by popularity)
 
 struct PopularView: View {
@@ -52,15 +106,28 @@ struct ArtistsView: View {
     @EnvironmentObject var model: AppModel
     @State private var artists: [Artist] = []
     @State private var query = ""
+    @State private var sort: BrowseSort = .popular
 
     var filtered: [Artist] {
         let base = query.isEmpty ? artists : artists.filter { $0.name.localizedCaseInsensitiveContains(query) }
         return model.visibleArtists(base)
     }
 
+    private func load() {
+        guard let c = model.catalog else { return }
+        switch sort {
+        case .recent: artists = c.artistsByRecent()
+        case .alphabetical: artists = c.allArtists()
+        case .popular: artists = c.artistsByPopularity()
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            SearchField(text: $query, prompt: "Filter artists")
+            HStack(spacing: 0) {
+                SearchField(text: $query, prompt: "Filter artists")
+                SortMenu(sort: $sort).padding(.trailing).padding(.bottom, 2)
+            }
             List(filtered) { artist in
                 NavigationLink(value: artist) {
                     HStack(spacing: 12) {
@@ -75,7 +142,8 @@ struct ArtistsView: View {
             }
         }
         .navigationTitle("Artists")
-        .task { if artists.isEmpty { artists = model.catalog?.allArtists() ?? [] } }
+        .task { if artists.isEmpty { load() } }
+        .onChange(of: sort) { load() }
     }
 }
 
@@ -122,6 +190,7 @@ struct AlbumsView: View {
     @State private var albums: [Album] = []
     @State private var names: [Int64: String] = [:]
     @State private var query = ""
+    @State private var sort: BrowseSort = .popular
 
     private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
 
@@ -130,9 +199,22 @@ struct AlbumsView: View {
         return model.visibleAlbums(base)
     }
 
+    private func load() {
+        guard let c = model.catalog else { return }
+        if names.isEmpty { names = c.artistNames() }
+        switch sort {
+        case .recent: albums = c.albumsByRecent()
+        case .alphabetical: albums = c.allAlbums()
+        case .popular: albums = c.albumsByPopularity()
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            SearchField(text: $query, prompt: "Filter albums")
+            HStack(spacing: 0) {
+                SearchField(text: $query, prompt: "Filter albums")
+                SortMenu(sort: $sort).padding(.trailing).padding(.bottom, 2)
+            }
             ScrollView {
                 LazyVGrid(columns: cols, spacing: 16) {
                     ForEach(filtered) { album in
@@ -143,11 +225,8 @@ struct AlbumsView: View {
             }
         }
         .navigationTitle("Albums")
-        .task {
-            guard albums.isEmpty, let c = model.catalog else { return }
-            names = c.artistNames()
-            albums = c.allAlbums()
-        }
+        .task { if albums.isEmpty { load() } }
+        .onChange(of: sort) { load() }
     }
 }
 
