@@ -224,23 +224,28 @@ struct SearchField: View {
     var prompt: String
     /// Optional external focus binding so a parent can auto-focus the field.
     var focused: FocusState<Bool>.Binding? = nil
+    /// Bumped on Clear to force a fresh TextField instance (see the clear button).
+    @State private var fieldGen = 0
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            field
+            // .id(fieldGen): only changes on Clear, so normal typing keeps the same field
+            // (and its focus). On Clear we bump it to rebuild the field — see below.
+            field.id(fieldGen)
             if !text.isEmpty {
-                // Use .onTapGesture, NOT a Button: on Mac Catalyst a Button adjacent to a
-                // first-responder TextField has its tap swallowed (the click resigns the field
-                // instead of firing the action), so the clear button did nothing. A tap gesture
-                // recognizer fires regardless. Generous hit area; keep focus so typing continues.
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.secondary)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
                     .onTapGesture {
+                        // Mac Catalyst won't visually clear a FOCUSED TextField from a programmatic
+                        // reset to "" (manual edits work, code-set doesn't; bouncing first-responder
+                        // also failed). Bumping .id() discards the stale field and builds a fresh one
+                        // bound to the now-empty text, then we re-focus it for continued typing.
                         text = ""
-                        focused?.wrappedValue = true
+                        fieldGen += 1
+                        DispatchQueue.main.async { focused?.wrappedValue = true }
                     }
             }
         }
