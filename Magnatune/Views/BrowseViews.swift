@@ -54,6 +54,39 @@ struct SortMenu: View {
     }
 }
 
+/// Genre filter placed beside the `SortMenu` on the Artists and Albums browse screens.
+/// A pull-down `Menu` (styled like the phone variant of `SortMenu`) whose default choice
+/// "Genres" means *all* genres. `options` is the list of genres to offer (already narrowed
+/// to the current search by the caller); `selection` is nil for "all".
+struct GenrePicker: View {
+    var options: [Genre]
+    @Binding var selection: Genre?
+
+    var body: some View {
+        Menu {
+            Button { selection = nil } label: {
+                if selection == nil { Label("All Genres", systemImage: "checkmark") } else { Text("All Genres") }
+            }
+            ForEach(options) { genre in
+                Button { selection = genre } label: {
+                    if selection == genre {
+                        Label(genre.name, systemImage: "checkmark")
+                    } else {
+                        Text(genre.name)
+                    }
+                }
+            }
+        } label: {
+            Label(selection?.name ?? "All Genres", systemImage: "line.3.horizontal.decrease.circle")
+                .labelStyle(.titleAndIcon)
+                .font(.callout)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .fixedSize()
+    }
+}
+
 // MARK: - Popular (albums by popularity)
 
 struct PopularView: View {
@@ -107,10 +140,36 @@ struct ArtistsView: View {
     @State private var artists: [Artist] = []
     @State private var query = ""
     @State private var sort: BrowseSort = .popular
+    @State private var allGenres: [Genre] = []
+    @State private var selectedGenre: Genre?
+
+    /// Artists whose NAME matches the current search, ignoring the genre selection. Used both
+    /// for the visible rows and to derive which genres the picker should offer.
+    private var nameMatched: [Artist] {
+        query.isEmpty ? artists : artists.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
 
     var filtered: [Artist] {
-        let base = query.isEmpty ? artists : artists.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        var base = nameMatched
+        if let g = selectedGenre {
+            // Read the membership map from the model so it tracks the current catalog
+            // (rebuilt on every refresh/hot-swap), never a stale per-view snapshot.
+            base = base.filter { model.genresByArtist[$0.id]?.contains(g.id) ?? false }
+        }
         return model.visibleArtists(base)
+    }
+
+    /// Genres represented among the name-matched artists (so the picker rebuilds per keystroke),
+    /// always keeping the current selection so it stays consistent. Empty search → all genres.
+    /// Disliked genres are dropped via `visibleGenres` (gated on hideDislikes), the same way
+    /// the Genres screen hides them — applied in addition to the search-aware narrowing.
+    private var genreOptions: [Genre] {
+        let available = model.visibleGenres(allGenres)
+        guard !query.isEmpty else { return available }
+        var present = Set<Int64>()
+        for a in nameMatched { if let gs = model.genresByArtist[a.id] { present.formUnion(gs) } }
+        if let sel = selectedGenre { present.insert(sel.id) }
+        return available.filter { present.contains($0.id) }
     }
 
     private func load() {
@@ -120,12 +179,14 @@ struct ArtistsView: View {
         case .alphabetical: artists = c.allArtists()
         case .popular: artists = c.artistsByPopularity()
         }
+        allGenres = c.allGenres()
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 SearchField(text: $query, prompt: "Filter artists")
+                GenrePicker(options: genreOptions, selection: $selectedGenre).padding(.trailing, 4).padding(.bottom, 2)
                 SortMenu(sort: $sort).padding(.trailing).padding(.bottom, 2)
             }
             List(filtered) { artist in
@@ -191,12 +252,36 @@ struct AlbumsView: View {
     @State private var names: [Int64: String] = [:]
     @State private var query = ""
     @State private var sort: BrowseSort = .popular
+    @State private var allGenres: [Genre] = []
+    @State private var selectedGenre: Genre?
 
     private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
 
+    /// Albums whose NAME matches the current search, ignoring the genre selection.
+    private var nameMatched: [Album] {
+        query.isEmpty ? albums : albums.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
     var filtered: [Album] {
-        let base = query.isEmpty ? albums : albums.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        var base = nameMatched
+        if let g = selectedGenre {
+            // Read the membership map from the model so it tracks the current catalog
+            // (rebuilt on every refresh/hot-swap), never a stale per-view snapshot.
+            base = base.filter { model.genresByAlbum[$0.id]?.contains(g.id) ?? false }
+        }
         return model.visibleAlbums(base)
+    }
+
+    /// Genres represented among the name-matched albums (rebuilt per keystroke), always
+    /// keeping the current selection. Empty search → all genres. Disliked genres are dropped
+    /// via `visibleGenres` (gated on hideDislikes), in addition to the search-aware narrowing.
+    private var genreOptions: [Genre] {
+        let available = model.visibleGenres(allGenres)
+        guard !query.isEmpty else { return available }
+        var present = Set<Int64>()
+        for a in nameMatched { if let gs = model.genresByAlbum[a.id] { present.formUnion(gs) } }
+        if let sel = selectedGenre { present.insert(sel.id) }
+        return available.filter { present.contains($0.id) }
     }
 
     private func load() {
@@ -207,12 +292,14 @@ struct AlbumsView: View {
         case .alphabetical: albums = c.allAlbums()
         case .popular: albums = c.albumsByPopularity()
         }
+        allGenres = c.allGenres()
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 SearchField(text: $query, prompt: "Filter albums")
+                GenrePicker(options: genreOptions, selection: $selectedGenre).padding(.trailing, 4).padding(.bottom, 2)
                 SortMenu(sort: $sort).padding(.trailing).padding(.bottom, 2)
             }
             ScrollView {
@@ -304,6 +391,8 @@ struct GenresView: View {
                 Image(systemName: genreIcon(genre.name)).frame(width: 24)
                 Text(genre.name)
                 Spacer()
+                Text("\(model.visibleAlbumCount(forGenre: genre.id))")
+                    .font(.callout).foregroundStyle(.secondary)
                 DislikeButton(kind: "genre", id: genre.id)
                 Image(systemName: "chevron.forward")
                     .font(.system(size: 14, weight: .semibold))
@@ -357,7 +446,14 @@ struct TagsView: View {
         VStack(spacing: 0) {
             SearchField(text: $query, prompt: "Filter tags")
             List(filtered) { tag in
-                NavigationLink(value: tag) { Label(tag.name, systemImage: "tag") }
+                NavigationLink(value: tag) {
+                    HStack {
+                        Label(tag.name, systemImage: "tag")
+                        Spacer()
+                        Text("\(model.visibleAlbumCount(forTag: tag.id))")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .navigationTitle("Tags")
@@ -400,7 +496,14 @@ struct CatalogPlaylistsView: View {
 
     var body: some View {
         List(model.visibleCatalogPlaylists(playlists)) { pl in
-            NavigationLink(value: pl) { Label(pl.name, systemImage: "music.note.list") }
+            NavigationLink(value: pl) {
+                HStack {
+                    Label(pl.name, systemImage: "music.note.list")
+                    Spacer()
+                    Text("\(model.visibleTrackCount(forCatalogPlaylist: pl.id))")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
         }
         .navigationTitle("Playlists")
         .task { if playlists.isEmpty { playlists = model.catalog?.catalogPlaylists() ?? [] } }

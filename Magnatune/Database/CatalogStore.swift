@@ -188,6 +188,30 @@ final class CatalogStore {
         } ?? []
     }
 
+    /// Map of album_id → the set of genre ids it belongs to. Built once and used by the
+    /// browse-screen genre filter so it can filter/group without a query per album.
+    func genresByAlbum() -> [Int64: Set<Int64>] {
+        let rows = read { try Row.fetchAll($0, sql: "SELECT album_id, genre_id FROM genres_albums") } ?? []
+        var map: [Int64: Set<Int64>] = [:]
+        for r in rows { map[r["album_id"], default: []].insert(r["genre_id"]) }
+        return map
+    }
+
+    /// Map of artist_id → the set of genre ids the artist appears in (via any of their
+    /// albums). Powers the Artists browse screen's genre filter (an artist is "in" a genre
+    /// if they have an album in it).
+    func genresByArtist() -> [Int64: Set<Int64>] {
+        let rows = read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT DISTINCT a.artist_id AS arid, ga.genre_id AS gid
+                FROM albums a JOIN genres_albums ga ON ga.album_id = a.album_id
+                """)
+        } ?? []
+        var map: [Int64: Set<Int64>] = [:]
+        for r in rows { map[r["arid"], default: []].insert(r["gid"]) }
+        return map
+    }
+
     /// Newest albums across one or more genres (for the Home page's per-genre rows).
     func newReleases(genreIDs: [Int64], limit: Int = 15) -> [Album] {
         guard !genreIDs.isEmpty else { return [] }

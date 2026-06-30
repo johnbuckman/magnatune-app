@@ -18,6 +18,14 @@ final class AppModel: ObservableObject {
     /// True while a newer catalog is being downloaded/installed in the background.
     @Published var isRefreshing = false
 
+    // MARK: Catalog-derived genre membership (drives the browse-screen genre filters)
+    // Rebuilt in `openCatalog()` so they track the CURRENT catalog and stay correct across a
+    // background refresh / hot-swap (no per-view @State caching that could go stale).
+    /// artist_id → genre ids the artist belongs to (via their albums).
+    @Published private(set) var genresByArtist: [Int64: Set<Int64>] = [:]
+    /// album_id → genre ids it belongs to.
+    @Published private(set) var genresByAlbum: [Int64: Set<Int64>] = [:]
+
     // MARK: Connectivity + offline state
     /// Whether the device currently has a usable network path. When false the UI
     /// hides everything that hasn't been downloaded and greys the browse sections.
@@ -409,6 +417,10 @@ final class AppModel: ObservableObject {
     private func openCatalog() {
         catalog = try? CatalogStore(path: CatalogSync.catalogPath())
         catalogReady = (catalog != nil)
+        // Rebuild genre-membership maps from the freshly-opened catalog so the browse-screen
+        // genre filters stay correct after a background refresh / hot-swap.
+        genresByArtist = catalog?.genresByArtist() ?? [:]
+        genresByAlbum = catalog?.genresByAlbum() ?? [:]
         recomputeDislikeSuppression()
     }
 
@@ -633,6 +645,34 @@ final class AppModel: ObservableObject {
         var r = isOnline ? playlists : playlists.filter { downloadedCatalogPlaylistIDs.contains($0.id) }
         if hideDislikes { r = r.filter { !suppressedCatalogPlaylistIDs.contains($0.id) } }
         return r
+    }
+
+    // MARK: Dislike-aware counts (for browse-list row counts)
+    // These mirror the dislike suppression used by the `visible*` filters so a row's count
+    // matches what the user would actually see. When `hideDislikes` is off they're full totals.
+
+    /// Number of albums in a genre, excluding disliked-suppressed albums when hiding dislikes.
+    func visibleAlbumCount(forGenre genreID: Int64) -> Int {
+        guard let c = catalog else { return 0 }
+        let albums = c.albums(forGenre: genreID)
+        guard hideDislikes else { return albums.count }
+        return albums.reduce(0) { $0 + (suppressedAlbumIDs.contains($1.id) ? 0 : 1) }
+    }
+
+    /// Number of albums carrying a tag (collection), excluding disliked-suppressed albums.
+    func visibleAlbumCount(forTag tagID: Int64) -> Int {
+        guard let c = catalog else { return 0 }
+        let albums = c.albums(forTag: tagID)
+        guard hideDislikes else { return albums.count }
+        return albums.reduce(0) { $0 + (suppressedAlbumIDs.contains($1.id) ? 0 : 1) }
+    }
+
+    /// Number of tracks in a Magnatune-curated playlist, excluding disliked-suppressed songs.
+    func visibleTrackCount(forCatalogPlaylist playlistID: Int64) -> Int {
+        guard let c = catalog else { return 0 }
+        let songs = c.songs(forCatalogPlaylist: playlistID)
+        guard hideDislikes else { return songs.count }
+        return songs.reduce(0) { $0 + (suppressedSongIDs.contains($1.id) ? 0 : 1) }
     }
 
     // MARK: High-level playback actions
