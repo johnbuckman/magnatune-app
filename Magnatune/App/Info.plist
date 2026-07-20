@@ -48,22 +48,10 @@
 	<array>
 		<string>_magnatune._tcp</string>
 	</array>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>magnatune.com</key>
-			<dict>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-				<key>NSExceptionMinimumTLSVersion</key>
-				<string>TLSv1.0</string>
-				<key>NSExceptionRequiresForwardSecrecy</key>
-				<false/>
-			</dict>
-		</dict>
-	</dict>
+	<!-- No NSAppTransportSecurity exception: every request the app makes is HTTPS to
+	     magnatune.com, which serves TLS 1.3 with a valid ECDSA certificate and forward
+	     secrecy, so it satisfies ATS defaults. The old exception existed only because the
+	     retired he3/download hosts were HTTP-only, and it also weakened TLS for the whole
+	     domain (minimum TLSv1.0, forward secrecy off). -->
 </dict>
 </plist>

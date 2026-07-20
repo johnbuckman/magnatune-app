@@ -3,18 +3,18 @@ import GRDB
 
 /// Downloads and refreshes the catalog SQLite database.
 ///
-/// Flow: GET he3.magnatune.com/info/changed.txt (a CRC). If it differs from the
+/// Flow: GET magnatune.com/info/changed.txt (a CRC). If it differs from the
 /// stored value (or no catalog exists yet), download sqlite_normalized.sql.gz —
 /// a gzipped SQL dump, ~70% smaller on the wire than the uncompressed .db it
 /// replaced — gunzip it, run the SQL into a fresh empty database to rebuild an
 /// identical catalog, then atomically replace the on-disk catalog. A seed copy is
 /// bundled so the app is usable offline on first launch.
 final class CatalogSync {
-    static let changedURL = URL(string: "http://he3.magnatune.com/info/changed.txt")!
+    static let changedURL = URL(string: "https://magnatune.com/info/changed.txt")!
     /// Gzipped SQL `.dump` of the catalog. Smaller than the .db/.db.gz because it
     /// carries no index b-trees or page padding — we rebuild an identical sqlite
     /// locally by running the dump into an empty database.
-    static let sqlDumpURL = URL(string: "http://he3.magnatune.com/info/sqlite_normalized.sql.gz")!
+    static let sqlDumpURL = URL(string: "https://magnatune.com/info/sqlite_normalized.sql.gz")!
 
     private let fm = FileManager.default
     private let crcKey = "catalog.crc"

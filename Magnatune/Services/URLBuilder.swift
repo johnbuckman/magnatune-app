@@ -43,13 +43,15 @@ enum StreamQuality: String, CaseIterable, Identifiable {
 /// Builds all Magnatune URLs (streams, cover art, artist photos, album downloads)
 /// from the catalog fields, applying correct percent-encoding.
 enum URLBuilder {
-    static let he3 = "he3.magnatune.com"
-    static let download = "download.magnatune.com"
-    static let www = "magnatune.com"
+    /// Everything is served same-origin over HTTPS by navim4's `/music` handler on
+    /// magnatune.com — the old `he3.magnatune.com` / `download.magnatune.com` hosts are retired.
+    /// Cover art, artist photos and the `_spoken` advert stream are free; the clean member
+    /// audio and album downloads are gated behind HTTP Basic (see `Credentials`).
+    static let host = "magnatune.com"
 
-    private static func url(host: String, path: String) -> URL? {
+    private static func url(path: String) -> URL? {
         var c = URLComponents()
-        c.scheme = "http"
+        c.scheme = "https"
         c.host = host
         c.path = path.hasPrefix("/") ? path : "/" + path
         return c.url
@@ -66,10 +68,10 @@ enum URLBuilder {
                           isMember: Bool, quality: StreamQuality = .normal) -> URL? {
         let file = song.mp3                              // e.g. "01-Title-artist.mp3"
         let stem = file.hasSuffix(".mp3") ? String(file.dropLast(4)) : file
-        // Both served by the fast he3 server. (he3 serves the member file without auth;
-        // the app only requests it when membership is verified.)
+        // Same-origin on magnatune.com. The `_spoken` advert file is free; the clean member
+        // file is HTTP Basic gated, satisfied from `URLCredentialStorage` (see `Credentials`).
         let suffix = isMember ? quality.memberSuffix : "_spoken"
-        return url(host: he3, path: "/music/\(artistName)/\(albumName)/\(stem)\(suffix).m4a")
+        return url(path: "/music/\(artistName)/\(albumName)/\(stem)\(suffix).m4a")
     }
 
     // MARK: Cover art
@@ -77,7 +79,7 @@ enum URLBuilder {
     /// Album cover thumbnails Magnatune generates as cover_<N>.jpg.
     /// Sizes available: 50, 75, 100, 150, 200, 300, 400, 600, 800, 1400.
     static func coverURL(artistName: String, albumName: String, size: Int) -> URL? {
-        url(host: he3, path: "/music/\(artistName)/\(albumName)/cover_\(size).jpg")
+        url(path: "/music/\(artistName)/\(albumName)/cover_\(size).jpg")
     }
 
     // MARK: Artist photo
@@ -87,14 +89,14 @@ enum URLBuilder {
     /// versus the full-resolution original at `artists.photo` (which can be several MB),
     /// so they're the preferred source whenever any album name for the artist is known.
     static func artistPhotoURL(artistName: String, albumName: String, size: Int) -> URL? {
-        url(host: he3, path: "/music/\(artistName)/\(albumName)/artist_\(size).jpg")
+        url(path: "/music/\(artistName)/\(albumName)/artist_\(size).jpg")
     }
 
     /// The single full-resolution original from `artists.photo`. Large; used only as a
     /// fallback when the artist has no album to source a sized thumbnail from.
     static func artistPhotoURL(_ artist: Artist) -> URL? {
         guard let p = artist.photo, !p.isEmpty else { return nil }
-        return url(host: he3, path: p)
+        return url(path: p)
     }
 
     // MARK: Album download (zip per format)
@@ -113,23 +115,24 @@ enum URLBuilder {
     }
 
     static func albumDownloadURL(artistName: String, albumName: String, sku: String, format: DownloadFormat) -> URL? {
-        url(host: download, path: "/music/\(artistName)/\(albumName)/\(sku)-\(format.rawValue).zip")
+        url(path: "/music/\(artistName)/\(albumName)/\(sku)-\(format.rawValue).zip")
     }
 
     /// Whole-album download via the magnatune membership endpoint (opens in a browser, which
     /// handles the member login). format ∈ vbr/mp3/aac/alac/flac/ogg/wav.
     static func albumMembershipDownloadURL(sku: String, format: String) -> URL? {
         var c = URLComponents()
-        c.scheme = "http"; c.host = download; c.path = "/membership/download3"
+        c.scheme = "https"; c.host = host; c.path = "/membership/download3"
         c.queryItems = [URLQueryItem(name: "sku", value: sku), URLQueryItem(name: "format", value: format)]
         return c.url
     }
 
-    /// Single-song download — the open per-track file on he3 (ext ∈ mp3/ogg/wav/flac/m4a).
+    /// Single-song download — the per-track file (ext ∈ mp3/ogg/wav/flac/m4a). Member-gated
+    /// by the same-origin /music handler, so it opens in a browser that can authenticate.
     static func songDownloadURL(artistName: String, albumName: String, song: Song, ext: String) -> URL? {
         let file = song.mp3
         let stem = file.hasSuffix(".mp3") ? String(file.dropLast(4)) : file
-        return url(host: he3, path: "/music/\(artistName)/\(albumName)/\(stem).\(ext)")
+        return url(path: "/music/\(artistName)/\(albumName)/\(stem).\(ext)")
     }
 
     // MARK: Quality-resolved streaming (Lossless → Normal fallback)

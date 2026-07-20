@@ -10,5 +10,14 @@
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<!-- A sandboxed app's keychain items are scoped by its keychain access group, which
+	     defaults to the application-identifier entitlement. Without this the membership
+	     password could not be stored or read (SecItemAdd/SecItemCopyMatching fail with
+	     errSecMissingEntitlement), so basicAuthHeader() was always nil — harmless while
+	     he3 served member audio unauthenticated, fatal once /music required HTTP Basic. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.magnatune.player</string>
+	</array>
 </dict>
 </plist>
