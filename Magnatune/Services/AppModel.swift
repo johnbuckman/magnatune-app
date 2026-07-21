@@ -587,10 +587,9 @@ final class AppModel: ObservableObject {
                 if Task.isCancelled { break }
                 if DownloadStore.shared.isDownloaded(song.id) { continue }
                 guard let album = c.album(id: song.albumId), let artist = c.artist(id: album.artistId),
-                      let url = await URLBuilder.resolvedStreamURL(
+                      let url = URLBuilder.downloadStreamURL(
                         artistName: artist.name, albumName: album.name, song: song,
-                        isMember: self.credentials.isMember, quality: StreamQuality.current,
-                        authHeader: self.credentials.basicAuthHeader()) else { continue }
+                        quality: StreamQuality.current) else { continue }
                 let ok = await DownloadStore.shared.downloadAsync(
                     songID: song.id, remote: url, authHeader: self.credentials.basicAuthHeader())
                 if ok { didChange = true; self.refreshDownloadedSets() }

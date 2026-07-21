@@ -1,42 +1,62 @@
 import Foundation
 
-/// Member streaming quality tier. Only applies to members (the free stream is always
-/// the `_spoken` announcement file). Maps to a filename suffix on the no-voice AAC stem.
+/// Member streaming quality tier. Only applies to members (the free stream is always the
+/// `_spoken` announcement file). Both tiers stream Ogg Opus (the server's `.opus` / `_hi.opus`),
+/// which AVFoundation on this OS decodes — so iOS uses the same Opus tiers as the web and
+/// Android clients. AAC is only a fallback, applied by `AudioPlayer` if Opus fails to play.
 enum StreamQuality: String, CaseIterable, Identifiable {
-    case normal              // ~160 kbps VBR AAC  -> "<stem>.m4a"
-    case lossless            // 256 kbps AAC-LC    -> "<stem>_256.m4a"
+    case normal              // 96 kbps Opus  -> "<stem>.opus"     (falls back to "<stem>.m4a")
+    case high                // 192 kbps Opus -> "<stem>_hi.opus"  (falls back to "<stem>.m4a")
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .normal:   return "Normal"
-        case .lossless: return "Lossless"
+        case .normal: return "Normal"
+        case .high:   return "High"
         }
     }
 
-    /// Short bitrate description shown beside the label in the picker.
+    /// Short format/bitrate description shown beside the label in the picker.
     var detail: String {
         switch self {
-        case .normal:   return "~160 kbps AAC"
-        case .lossless: return "256 kbps AAC-LC"
+        case .normal: return "96 kbps Opus"
+        case .high:   return "192 kbps Opus"
         }
     }
 
-    /// Suffix appended to the member (no-voice) AAC stem.
-    var memberSuffix: String {
+    /// The Opus file the app streams for members at this tier. (AAC is only the fallback,
+    /// applied by `AudioPlayer` if the Opus stream fails to play — see `handleItemFailure`.)
+    var memberFile: (suffix: String, ext: String) {
         switch self {
-        case .normal:   return ""
-        case .lossless: return "_256"
+        case .normal: return ("", "opus")     // 96 kbps Opus
+        case .high:   return ("_hi", "opus")  // 192 kbps Opus
         }
     }
+
+    /// The AAC (`.m4a`) file streamed as the fallback when Opus can't play on this device
+    /// (`AudioPlayer` sets `allowOpus: false` after an Opus item fails). Not used unless the
+    /// tier's Opus file fails to decode.
+    var aacFallbackFile: (suffix: String, ext: String) {
+        switch self {
+        case .normal: return ("", "m4a")       // 185 kbps AAC
+        case .high:   return ("_256", "m4a")   // 256 kbps AAC
+        }
+    }
+
+    /// Non-member (free) stream: the end-of-track announcement AAC file.
+    static let freeFile: (suffix: String, ext: String) = ("_spoken", "m4a")
 
     /// UserDefaults key for the persisted choice.
     static let defaultsKey = "stream.quality"
 
-    /// The current persisted tier (defaults to `.normal`).
+    /// The current persisted tier. Defaults to **Normal** (96 kbps Opus); the retired
+    /// "lossless" (256 kbps AAC) selection is treated as High.
     static var current: StreamQuality {
-        StreamQuality(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .normal
+        switch UserDefaults.standard.string(forKey: defaultsKey) {
+        case "high", "lossless": return .high
+        default:                 return .normal   // "normal", unset, or anything else
+        }
     }
 }
 
@@ -59,19 +79,15 @@ enum URLBuilder {
 
     // MARK: Streaming
 
-    /// AAC (.m4a) stream from the per-album path. Members get the no-announcement file at
-    /// the chosen quality — `<track>.m4a` (Normal, ~160 kbps) or `<track>_256.m4a`
-    /// (Lossless, 256 kbps AAC-LC). Non-members get the free `<track>_spoken.m4a` (which has
-    /// the spoken announcement at the end of the track) regardless of the quality setting.
-    /// The stem comes from the catalog's `mp3` field (extension swapped).
-    static func streamURL(artistName: String, albumName: String, song: Song,
-                          isMember: Bool, quality: StreamQuality = .normal) -> URL? {
+    /// Build a media URL for a track from a `(suffix, extension)` file spec — e.g.
+    /// `("_hi", "opus")` → `<stem>_hi.opus`, `("", "m4a")` → `<stem>.m4a`. The stem comes from
+    /// the catalog's `mp3` field (extension swapped). Same-origin on magnatune.com; the clean
+    /// member files are HTTP Basic gated (see `Credentials`), the `_spoken` advert is free.
+    private static func mediaURL(artistName: String, albumName: String, song: Song,
+                                 suffix: String, ext: String) -> URL? {
         let file = song.mp3                              // e.g. "01-Title-artist.mp3"
         let stem = file.hasSuffix(".mp3") ? String(file.dropLast(4)) : file
-        // Same-origin on magnatune.com. The `_spoken` advert file is free; the clean member
-        // file is HTTP Basic gated, satisfied from `URLCredentialStorage` (see `Credentials`).
-        let suffix = isMember ? quality.memberSuffix : "_spoken"
-        return url(path: "/music/\(artistName)/\(albumName)/\(stem)\(suffix).m4a")
+        return url(path: "/music/\(artistName)/\(albumName)/\(stem)\(suffix).\(ext)")
     }
 
     // MARK: Cover art
@@ -135,52 +151,49 @@ enum URLBuilder {
         return url(path: "/music/\(artistName)/\(albumName)/\(stem).\(ext)")
     }
 
-    // MARK: Quality-resolved streaming (Lossless → Normal fallback)
+    // MARK: Quality-resolved streaming (Opus, with AAC fallback on playback failure)
 
-    /// Best stream URL for a track, transparently falling back from Lossless (`_256.m4a`)
-    /// to the Normal member AAC (`.m4a`) when the 256 kbps file hasn't been encoded on the
-    /// server yet. Only Lossless members trigger a probe; everyone else resolves instantly.
-    /// Availability is cached for the session by `LosslessProbe`.
+    /// The stream URL for a track. Members get the Opus file for their tier; non-members get
+    /// the free `_spoken.m4a` advert. When `allowOpus` is false — set by `AudioPlayer` after an
+    /// Opus stream has actually failed to play on this device — members get the tier's AAC file
+    /// instead. There is deliberately NO pre-flight existence probe: a genuinely missing or
+    /// undecodable Opus file is caught by the playback-failure fallback in
+    /// `AudioPlayer.handleItemFailure`, which tests real playback (not just a HEAD), adds no
+    /// latency, and — unlike a HEAD probe — can't be defeated by an auth/transport hiccup that
+    /// would otherwise wrongly demote every track to AAC.
     static func resolvedStreamURL(artistName: String, albumName: String, song: Song,
                                   isMember: Bool, quality: StreamQuality,
-                                  authHeader: String?) async -> URL? {
-        guard isMember, quality == .lossless else {
-            return streamURL(artistName: artistName, albumName: albumName, song: song,
-                             isMember: isMember, quality: quality)
+                                  allowOpus: Bool = true) -> URL? {
+        let file: (suffix: String, ext: String)
+        if isMember {
+            file = allowOpus ? quality.memberFile : quality.aacFallbackFile
+        } else {
+            file = StreamQuality.freeFile
         }
-        guard let lossless = streamURL(artistName: artistName, albumName: albumName, song: song,
-                                       isMember: true, quality: .lossless),
-              let normal = streamURL(artistName: artistName, albumName: albumName, song: song,
-                                     isMember: true, quality: .normal) else { return nil }
-        let exists = await LosslessProbe.shared.exists(lossless, authHeader: authHeader)
-        return exists ? lossless : normal
+        return mediaURL(artistName: artistName, albumName: albumName, song: song, suffix: file.suffix, ext: file.ext)
     }
-}
 
-/// Caches, for the lifetime of the session, which Lossless (`_256.m4a`) stream URLs exist
-/// on the server. Lets the app fall back to the Normal member AAC for tracks the encoder
-/// hasn't yet rebuilt at 256k, without 404-ing or re-probing the same file repeatedly.
-actor LosslessProbe {
-    static let shared = LosslessProbe()
-    private var known: [String: Bool] = [:]
+    /// Permanent-download URL for a track: the Opus file for the tier, matching what the app
+    /// streams so offline "keep" copies play the same format. `DownloadStore` stores it under
+    /// the file's real extension (`.opus`).
+    static func downloadStreamURL(artistName: String, albumName: String, song: Song,
+                                  quality: StreamQuality) -> URL? {
+        let f = quality.memberFile
+        return mediaURL(artistName: artistName, albumName: albumName, song: song, suffix: f.suffix, ext: f.ext)
+    }
 
-    /// True if the file exists. Probes once (HTTP HEAD) and caches the result. A network
-    /// error resolves to `false` so playback safely falls back to the Normal stream.
-    func exists(_ url: URL, authHeader: String?) async -> Bool {
-        let key = url.absoluteString
-        if let cached = known[key] { return cached }
-        var req = URLRequest(url: url)
-        req.httpMethod = "HEAD"
-        req.timeoutInterval = 8
-        if let authHeader { req.setValue(authHeader, forHTTPHeaderField: "Authorization") }
-        let ok: Bool
-        do {
-            let (_, resp) = try await URLSession.shared.data(for: req)
-            ok = (resp as? HTTPURLResponse).map { (200...399).contains($0.statusCode) } ?? false
-        } catch {
-            ok = false
-        }
-        known[key] = ok
-        return ok
+    /// Human label of the audio actually being streamed, derived from the resolved file name:
+    /// `_hi.opus` → "Opus · 192 kbps", plain `.opus` → "Opus · 96 kbps",
+    /// `_256.m4a` → "AAC · 256 kbps", plain `.m4a` → "AAC · 185 kbps",
+    /// `_spoken.*` → "… · preview" (the free advert stream).
+    static func formatLabel(forStreamURL url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        let isOpus = url.pathExtension.lowercased() == "opus"
+        let codec = isOpus ? "Opus" : "AAC"
+        if stem.hasSuffix("_spoken") { return "\(codec) · preview" }
+        let kbps = stem.hasSuffix("_hi") ? 192
+                 : stem.hasSuffix("_256") ? 256
+                 : (isOpus ? 96 : 185)
+        return "\(codec) · \(kbps) kbps"
     }
 }

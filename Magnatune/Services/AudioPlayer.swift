@@ -22,6 +22,9 @@ final class AudioPlayer: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
+    /// Human label of the audio format/bitrate currently playing (e.g. "Opus · 192 kbps"),
+    /// shown under the title in the Now Playing view. Empty when nothing is playing locally.
+    @Published private(set) var currentFormat: String = ""
     @Published private(set) var outputRouteName: String = ""
     @Published private(set) var isExternalRoute = false
     /// Persistent shuffle mode. When on, starting playback shuffles the queue.
@@ -57,12 +60,20 @@ final class AudioPlayer: ObservableObject {
     /// paused) ahead of the fade window, but before the audible ramp has begun.
     private var crossfadePrepared = false
     private var preparedNextSongID: Int64?
+    /// Format label of the buffered crossfade track, promoted to `currentFormat` on finalize.
+    private var preparedNextFormat: String?
     private var fadeStep = 0
     /// Start buffering the incoming track this many seconds before the fade window so it
     /// can begin playing the instant the ramp starts — otherwise the first second(s) of
     /// the fade are silent while the incoming item buffers.
     private let crossfadeLead: Double = 3
     private var endObserver: NSObjectProtocol?
+    /// KVO on the audible item's `status`, so a failed Opus stream can fall back to AAC.
+    private var statusObs: NSKeyValueObservation?
+    /// Set once an Opus stream fails to play on this device (e.g. AVFoundation can't decode
+    /// Ogg Opus). Once tripped, the session streams AAC only, so the failing track and every
+    /// later one transparently fall back. Session-scoped: Opus is re-tried on next launch.
+    private var opusDisabledThisSession = false
 
     /// User-configurable crossfade length (seconds), clamped to 1...10. Read live so a
     /// change in Settings applies to the next crossfade without restarting.
@@ -78,6 +89,11 @@ final class AudioPlayer: ObservableObject {
     init(credentials: Credentials, userStore: UserStore?) {
         self.credentials = credentials
         self.userStore = userStore
+        // Migrate the retired "lossless" (256 kbps AAC) quality selection to High (192 kbps Opus),
+        // so the Settings picker and the player agree for anyone who had picked it.
+        if UserDefaults.standard.string(forKey: StreamQuality.defaultsKey) == "lossless" {
+            UserDefaults.standard.set(StreamQuality.high.rawValue, forKey: StreamQuality.defaultsKey)
+        }
         configureSession()
         setupRemoteCommands()
         startTicker()
@@ -161,38 +177,48 @@ final class AudioPlayer: ObservableObject {
 
     // MARK: Loading
 
+    /// A resolved asset plus the human label of the audio it will actually play.
+    private struct PreparedAsset { let asset: AVURLAsset; let format: String }
+
     /// Build an asset for a track, preferring the on-device cache. Async because it may probe
-    /// the server to resolve the Lossless → Normal fallback for member streams.
-    private func makeAsset(for track: PlayableTrack) async -> AVURLAsset? {
-        // Prefer a permanent download (e.g. auto-downloaded favorite) — plays offline.
-        if let downloaded = DownloadStore.shared.localURL(for: track.song.id) {
-            return AVURLAsset(url: downloaded)
+    /// the server to resolve the Opus → AAC fallback for member streams. Also reports the
+    /// format/bitrate label of the resolved source (shown under the title in Now Playing).
+    private func makeAsset(for track: PlayableTrack) async -> PreparedAsset? {
+        // Prefer a permanent download (auto-downloaded favorite) — plays offline and saves
+        // bandwidth. Downloads are Opus; skip one once Opus has failed on this device so the
+        // AAC stream fallback can take over instead of replaying an undecodable local file.
+        if let downloaded = DownloadStore.shared.localURL(for: track.song.id),
+           !(opusDisabledThisSession && downloaded.pathExtension.lowercased() == "opus") {
+            let codec = downloaded.pathExtension.lowercased() == "opus" ? "Opus" : "AAC"
+            return PreparedAsset(asset: AVURLAsset(url: downloaded), format: codec)
         }
-        guard let url = await URLBuilder.resolvedStreamURL(
+        guard let url = URLBuilder.resolvedStreamURL(
             artistName: track.artistName, albumName: track.album.name, song: track.song,
             isMember: credentials.isMember, quality: StreamQuality.current,
-            authHeader: credentials.basicAuthHeader()) else { return nil }
+            allowOpus: !opusDisabledThisSession) else { return nil }
+        let format = URLBuilder.formatLabel(forStreamURL: url)
         if cacheEnabled, let local = AudioCache.shared.cached(for: url) {
-            return AVURLAsset(url: local)
+            return PreparedAsset(asset: AVURLAsset(url: local), format: format)
         }
         var options: [String: Any] = [:]
         if let auth = credentials.basicAuthHeader() {
             options["AVURLAssetHTTPHeaderFieldsKey"] = ["Authorization": auth]
         }
         if cacheEnabled { AudioCache.shared.store(remote: url, authHeader: credentials.basicAuthHeader()) }
-        return AVURLAsset(url: url, options: options)
+        return PreparedAsset(asset: AVURLAsset(url: url, options: options), format: format)
     }
 
     private func loadCurrent(autoPlay: Bool) {
         guard let track = current else { return }
         Task { @MainActor in
-            guard let asset = await makeAsset(for: track) else { return }
+            guard let prepared = await makeAsset(for: track) else { return }
             // The user may have skipped while we were resolving/probing — ignore stale loads.
             guard self.current?.song.id == track.song.id, !self.crossfading else { return }
-            let item = AVPlayerItem(asset: asset)
+            let item = AVPlayerItem(asset: prepared.asset)
             self.active.volume = self.volume
             self.active.replaceCurrentItem(with: item)
-            self.observeEnd(item: item)
+            self.currentFormat = prepared.format
+            self.observe(item: item, for: track)
             self.duration = TimeInterval(track.song.duration ?? 0)
             self.currentTime = 0
             if autoPlay { self.active.play(); self.isPlaying = true }
@@ -209,10 +235,10 @@ final class AudioPlayer: ObservableObject {
         // Already on disk as a permanent download — no need to prefetch over the network.
         if DownloadStore.shared.localURL(for: track.song.id) != nil { return }
         Task { @MainActor in
-            guard let url = await URLBuilder.resolvedStreamURL(
+            guard let url = URLBuilder.resolvedStreamURL(
                 artistName: track.artistName, albumName: track.album.name, song: track.song,
                 isMember: credentials.isMember, quality: StreamQuality.current,
-                authHeader: credentials.basicAuthHeader()) else { return }
+                allowOpus: !opusDisabledThisSession) else { return }
             AudioCache.shared.store(remote: url, authHeader: self.credentials.basicAuthHeader())
         }
     }
@@ -230,15 +256,16 @@ final class AudioPlayer: ObservableObject {
         let nextTrack = queue[index + 1]
         let startIndex = index
         Task { @MainActor in
-            guard let asset = await makeAsset(for: nextTrack) else { self.crossfadePrepared = false; return }
+            guard let prepared = await makeAsset(for: nextTrack) else { self.crossfadePrepared = false; return }
             // Bail if anything changed while resolving (skip, stop, queue change, cancel).
             guard self.crossfadePrepared, !self.crossfading, self.index == startIndex, self.hasNext,
                   self.queue[self.index + 1].song.id == nextTrack.song.id else { return }
-            let item = AVPlayerItem(asset: asset)
+            let item = AVPlayerItem(asset: prepared.asset)
             self.inactive.volume = 0
             self.inactive.replaceCurrentItem(with: item)
             self.inactive.seek(to: .zero, completionHandler: { _ in })
             self.preparedNextSongID = nextTrack.song.id
+            self.preparedNextFormat = prepared.format
         }
     }
 
@@ -250,10 +277,15 @@ final class AudioPlayer: ObservableObject {
         guard crossfadePrepared, hasNext, !crossfading,
               inactive.currentItem != nil,
               preparedNextSongID == queue[index + 1].song.id else { return }
+        // If the buffered incoming item already failed (e.g. an Opus file this device can't
+        // decode), fall back to AAC instead of fading into silence.
+        if inactive.currentItem?.status == .failed, let item = inactive.currentItem {
+            handleItemFailure(item: item, track: queue[index + 1]); return
+        }
         crossfading = true
         fadeStep = 0
-        // The incoming track owns the end-of-track observer from here on.
-        if let item = inactive.currentItem { observeEnd(item: item) }
+        // The incoming track owns the end/failure observer from here on.
+        if let item = inactive.currentItem { observe(item: item, for: queue[index + 1]) }
         if isPlaying { inactive.play() }
 
         let interval = 0.05
@@ -287,6 +319,8 @@ final class AudioPlayer: ObservableObject {
         crossfading = false
         crossfadePrepared = false
         preparedNextSongID = nil
+        currentFormat = preparedNextFormat ?? currentFormat
+        preparedNextFormat = nil
         if let track = current {
             duration = TimeInterval(track.song.duration ?? 0)
             userStore?.recordPlay(songID: track.song.id)
@@ -303,12 +337,13 @@ final class AudioPlayer: ObservableObject {
         crossfading = false
         crossfadePrepared = false
         preparedNextSongID = nil
+        preparedNextFormat = nil
         inactive.pause()
         inactive.replaceCurrentItem(with: nil)
         inactive.volume = 1
         active.volume = volume
-        // re-attach the end observer to the (still-current) active item
-        if let item = active.currentItem { observeEnd(item: item) }
+        // re-attach the end/failure observer to the (still-current) active item
+        if let item = active.currentItem, let track = current { observe(item: item, for: track) }
     }
 
     // MARK: Progress ticker
@@ -340,11 +375,38 @@ final class AudioPlayer: ObservableObject {
 
     // MARK: End-of-track
 
-    private func observeEnd(item: AVPlayerItem) {
+    /// Observe the audible item for end-of-track (advance/crossfade) and for load/playback
+    /// failure (the Opus → AAC fallback).
+    private func observe(item: AVPlayerItem, for track: PlayableTrack) {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.handleItemEnd() }
+        }
+        statusObs?.invalidate()
+        statusObs = item.observe(\.status, options: [.new]) { [weak self] it, _ in
+            guard it.status == .failed else { return }
+            Task { @MainActor in self?.handleItemFailure(item: it, track: track) }
+        }
+    }
+
+    /// A stream item failed to load or play. If it was an Opus stream, disable Opus for the
+    /// rest of the session and reload as AAC — so a device (or a single file) that Opus doesn't
+    /// work on transparently falls back, and later tracks skip Opus entirely. The `.opus` guard
+    /// means an AAC failure (a real network/auth problem) does not pointlessly disable Opus.
+    private func handleItemFailure(item: AVPlayerItem, track: PlayableTrack) {
+        guard !opusDisabledThisSession,
+              (item.asset as? AVURLAsset)?.url.pathExtension.lowercased() == "opus" else { return }
+        opusDisabledThisSession = true
+        NSLog("Magnatune: Opus stream failed for \"%@\" — falling back to AAC for this session (%@)",
+              track.song.name, String(describing: item.error))
+        if item === active.currentItem {
+            // The audible track failed: reload it in place as AAC.
+            loadCurrent(autoPlay: isPlaying)
+        } else {
+            // A prepared/crossfading Opus item failed: drop the crossfade so the advance into
+            // this track (and every later load) resolves to AAC.
+            cancelCrossfade()
         }
     }
 

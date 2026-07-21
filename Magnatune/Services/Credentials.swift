@@ -11,7 +11,7 @@ final class Credentials: ObservableObject {
 
     /// Verified membership status. Membership is checked ONCE at launch (see
     /// `refreshMembership()`) and whenever credentials change in Settings — never per
-    /// media request. It decides WHICH file to request (member → clean `.m4a`,
+    /// media request. It decides WHICH file to request (member → clean Opus,
     /// non-member → the free `_spoken.m4a`); the clean file is then HTTP Basic gated by
     /// magnatune.com, satisfied by the `Authorization` header from `basicAuthHeader()`.
     /// Initialised optimistically from stored credentials so a returning member streams
@@ -47,7 +47,7 @@ final class Credentials: ObservableObject {
     /// `WWW-Authenticate: Basic realm="Magnatune Membership"` challenge to non-browser
     /// clients). Auth is carried by an explicit `Authorization` header on every media
     /// request — `AVURLAssetHTTPHeaderFieldsKey` in `AudioPlayer.makeAsset`, and the
-    /// `authHeader` parameter on `AudioCache` / `DownloadStore` / `LosslessProbe`.
+    /// `authHeader` parameter on `AudioCache` / `DownloadStore`.
     ///
     /// NOTE: registering a `URLCredential` in `URLCredentialStorage.shared` does NOT work
     /// here. CoreMedia loads media through its own out-of-process HTTP stack, which never

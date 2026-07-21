@@ -99,7 +99,7 @@ struct SettingsView: View {
                 Toggle("Cache streamed music on device", isOn: $audioCacheEnabled)
             } header: { Text("Streaming") } footer: {
                 Text(creds.isMember
-                     ? "Members can stream at Normal (~160 kbps AAC) or Lossless (256 kbps AAC-LC). When caching is on, tracks you play are saved so they don't re-download next time (and the next track is prefetched to remove gaps). Up to 1 GB."
+                     ? "Members stream Opus — Normal (96 kbps) or High (192 kbps) — with automatic AAC fallback. When caching is on, tracks you play are saved so they don't re-download next time (and the next track is prefetched to remove gaps). Up to 1 GB."
                      : "Tracks stream as AAC (.m4a). When caching is on, tracks you play are saved so they don't re-download next time (and the next track is prefetched to remove gaps). Up to 1 GB.")
             }
 
@@ -526,7 +526,7 @@ let helpSections: [HelpSection] = [
     HelpSection(title: "Membership & sound quality", blocks: [
         .text("You can stream everything for free. Free streams include a short spoken announcement at the end of each track."),
         .text("A Magnatune membership removes the announcement, unlocks higher-quality audio, and lets you download music. Sign in under **Settings** → Magnatune Membership."),
-        .bullet("Members can choose **Normal** or **Lossless** audio quality in **Settings**."),
+        .bullet("Members can choose **Normal** or **High** Opus quality in **Settings**."),
     ]),
     HelpSection(title: "Offline listening", blocks: [
         .text("Members can keep music on the device to play without a connection."),

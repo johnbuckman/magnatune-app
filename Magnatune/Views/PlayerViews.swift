@@ -377,6 +377,13 @@ struct NowPlayingView: View {
                             .multilineTextAlignment(.center)
                             .contentShape(Rectangle())
                             .onTapGesture { onOpenAlbum(track.album) }
+                        // Currently-playing audio format + bitrate (local playback only).
+                        if remote == nil, !audio.currentFormat.isEmpty {
+                            Text(audio.currentFormat)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .padding(.top, 1)
+                        }
                     }
                     progressBar(track: track)
                     controls
