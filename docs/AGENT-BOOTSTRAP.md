@@ -291,7 +291,15 @@ with `afconvert -f caff -d opus in.wav out.caf`; a real Ogg‑Opus with
 - **Download format label** shows codec only ("Opus"), not bitrate, because `<songID>.opus`
   doesn't encode the tier. Could name downloads with the tier suffix (and parse the leading
   song id) if the exact rate matters.
-- **No fresh release/DMG** cut for this work.
+- ✅ **Released as v0.2.0** (2026-07-21): notarized universal DMG + zipped .app on the GitHub
+  release, and the DMG is served at `magnatune.com/downloads/magnatune-osx.dmg` (committed to
+  navim4 `downloads/`, gitignore-whitelisted) and linked from the web player's Settings → Apps
+  ("Magnatune for OSX"). **Release recipe:** bump `MARKETING_VERSION` in `project.yml` →
+  `xcodegen generate` → `./build-osx-dmg.sh` (Developer ID "Vid Tadel", notary profile
+  `bping-notary`; drops `~/Desktop/Magnatune-v<V>.dmg` + `.app`, Gatekeeper "Notarized
+  Developer ID") → `gh release create` with the DMG + a `ditto`-zipped .app → copy the DMG into
+  `~/navim4/downloads/` and bump the `app/index.html` `?v=`. ⚠️ navim4 is pushed but **prod
+  needs a `git pull`** to serve the new DMG/settings (no ssh to prod from this Mac).
 
 ---
 
