@@ -91,7 +91,7 @@ suppressed when `Sec-Fetch-Dest` is present (browsers), but native clients (AVPl
 real `WWW-Authenticate`. **File existence is checked before auth**, so a `401` (not `404`)
 proves the file exists.
 
-**Test member creds:** `johndown` / `john99`.
+**Test member creds:** use your own magnatune.com member login (a paid membership).
 
 Covers: `cover_<N>.jpg` (50,75,100,150,200,300,400,600,800,1400; webp for a subset). Artist
 photos: `artist_<N>.jpg` per album dir. Catalog: `/info/sqlite_normalized.sql.gz`, version
@@ -224,7 +224,7 @@ with the playback‑failure fallback and caused Bug 1.
 
 **curl the server (member entitlement + real Opus payload):**
 ```bash
-U=johndown P=john99
+U=your_member_user P=your_member_pass   # your own magnatune.com member login
 BASE='https://magnatune.com/music/1KUB/French%20Kiss/02-Bless%20Us-1kub'   # a known real track
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' -r 0-0 "$BASE_hi.opus"          # noauth → 401
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' -u "$U:$P" -r 0-0 "${BASE}_hi.opus"   # auth → 206 audio/ogg

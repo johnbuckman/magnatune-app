@@ -301,7 +301,7 @@ final class AppModel: ObservableObject {
     }
 
     /// An automatic, human-friendly device name for the local network, e.g.
-    /// "Gill's iPad Pro 11" or "Gill's iPad A16". UIDevice.name is generic on iOS 16+,
+    /// "Alex's iPad Pro 11" or "Alex's iPad A16". UIDevice.name is generic on iOS 16+,
     /// so we combine the owner (from the network host name) with the hardware model.
     static func currentDeviceName() -> String {
         #if targetEnvironment(macCatalyst)
@@ -317,7 +317,7 @@ final class AppModel: ObservableObject {
     }
 
     /// First component of the network host name, capitalized — usually the owner,
-    /// e.g. "gill-ipad-2.local" → "Gill". Nil if it isn't a recognizable owner token.
+    /// e.g. "alex-ipad-2.local" → "Alex". Nil if it isn't a recognizable owner token.
     private static func ownerFromHostName() -> String? {
         let host = ProcessInfo.processInfo.hostName
         let base = host.split(separator: ".").first.map(String.init) ?? host

@@ -1,6 +1,7 @@
 # Build output (large; regenerated)
 build/
 build-ios/
+build-ios-unsigned/
 build-osx/
 DerivedData/
 
@@ -16,3 +17,6 @@ xcuserdata/
 # macOS
 .DS_Store
 build-sim/
+
+# Per-developer device list for dist-iter.sh (CoreDevice IDs; not shared)
+dist-devices.local

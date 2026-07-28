@@ -11,12 +11,12 @@
 set -u
 cd "$(dirname "$0")"
 
-DEVICES=(
-  "4AEB8C9B-A879-599E-A1F4-FCFCFE7E5B02"  # Bugsy's iPad (Air 5)
-  "83BD400B-DBBC-5EA5-9B60-CC210A4D2021"  # Gill iPhone 14 Pro Max
-  "6DE2C9EC-36F0-5916-9B87-875E5E310D43"  # Gill iPad (A16)
-  "F8B770E6-60A9-5FCE-9266-D63B7BFB0840"  # Gill iPad Pro 11"
-)
+# Registered dev devices to install to — CoreDevice IDs (`xcrun devicectl list devices`).
+# These are per-developer, so they live in an untracked file rather than in git.
+# Create dist-devices.local beside this script with lines like:
+#   DEVICES+=("XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX")   # my iPad
+DEVICES=()
+[[ -f dist-devices.local ]] && source dist-devices.local
 
 CAT_APP="build/Build/Products/Debug-maccatalyst/Magnatune.app"
 IOS_APP="build-ios/Build/Products/Debug-iphoneos/Magnatune.app"
@@ -54,7 +54,10 @@ echo "  ✓ ~/Desktop/Magnatune.app  (v$VER build $BLD)"
 
 # Install to every reachable device
 echo "▶ installing to devices…"
-for d in "${DEVICES[@]}"; do
+if [[ ${#DEVICES[@]} -eq 0 ]]; then
+  echo "  (no devices configured — see the dist-devices.local note near the top of this script)"
+fi
+for d in ${DEVICES[@]+"${DEVICES[@]}"}; do
   if xcrun devicectl device install app --device "$d" "$IOS_APP" >/tmp/mag-install-$d.log 2>&1; then
     echo "  ✓ installed → $d"
   else
