@@ -114,7 +114,7 @@ struct RootView: View {
             .environmentObject(model.audio)
         }
         .background(MacWindowConfigurator())
-        .onAppear { model.startPeerSharingIfNeeded(); restoreNavPathIfNeeded() }
+        .onAppear { model.resumePeerSharingIfGranted(); restoreNavPathIfNeeded() }
         .alert(model.localNetworkDenied ? "Local Network Access Needed" : "Find Magnatune Players Nearby",
                isPresented: $model.showLocalNetworkPrimer) {
             if model.localNetworkDenied {

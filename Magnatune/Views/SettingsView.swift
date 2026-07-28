@@ -232,7 +232,7 @@ struct SettingsView: View {
             groupDivider
 
             Section("About") {
-                LabeledContent("App", value: "Magnatune Player 0.1")
+                LabeledContent("App", value: "Magnatune Player \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
                 Text("Music licensed Creative Commons by Magnatune (magnatune.com).")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Why we are not evil") { showWhyNotEvil = true }

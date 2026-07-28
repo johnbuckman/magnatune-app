@@ -68,7 +68,10 @@ final class AppModel: ObservableObject {
     static let peerSharingKey = "peer.sharing.enabled"
     static let autoStopKey = "peer.autostop.enabled"
     /// Whether this instance advertises/controls on the local network.
-    @Published var peerSharingEnabled: Bool = UserDefaults.standard.object(forKey: "peer.sharing.enabled") as? Bool ?? true
+    // Local-network peer sharing is fully OPT-IN: OFF by default, and never asked for at
+    // launch. The user turns on "Share & control" in Settings (which is when the iOS Local
+    // Network prompt fires). A first-time user is never greeted by a permission prompt.
+    @Published var peerSharingEnabled: Bool = UserDefaults.standard.object(forKey: "peer.sharing.enabled") as? Bool ?? false
     /// When on, starting playback here pauses other Magnatune apps that were already
     /// playing (most-recent play wins). Both sides must have it on.
     @Published var autoStopOtherMusic: Bool = UserDefaults.standard.object(forKey: "peer.autostop.enabled") as? Bool ?? true
@@ -200,6 +203,25 @@ final class AppModel: ObservableObject {
     ///    probe this state without iOS showing the prompt itself, so it's gated by a flag.
     ///  • asked before → probe the OS (no prompt): granted ⇒ start silently; denied ⇒ show
     ///    the explainer with a Settings deep-link.
+    /// Set the live grant status AND persist it, so a later launch can resume peer sharing
+    /// without re-probing (probing Bonjour is itself what triggers the iOS Local Network prompt).
+    private func recordLocalNetworkGrant(_ granted: Bool) {
+        localNetworkGranted = granted
+        UserDefaults.standard.set(granted, forKey: "peer.localNetworkGranted")
+    }
+
+    /// Launch-time resume (RootView.onAppear). Starts peer sharing silently ONLY if sharing is
+    /// on AND Local Network was confirmed granted in a past session (persisted). It NEVER probes
+    /// and NEVER prompts at launch — starting/probing Bonjour is what shows the iOS Local Network
+    /// prompt, so the only place that's allowed is the Settings "Share & control" toggle. If a
+    /// prior grant was lost (e.g. the app was reinstalled), sharing stays off until the user
+    /// re-enables it in Settings.
+    func resumePeerSharingIfGranted() {
+        guard peerSharingEnabled,
+              UserDefaults.standard.bool(forKey: "peer.localNetworkGranted") else { return }
+        peerService.start(); startHeartbeat()
+    }
+
     func startPeerSharingIfNeeded() {
         guard peerSharingEnabled else { return }
         guard hasRequestedLocalNetwork else {
@@ -209,7 +231,7 @@ final class AppModel: ObservableObject {
         }
         lnAuth.check { [weak self] granted in
             guard let self else { return }
-            self.localNetworkGranted = granted
+            self.recordLocalNetworkGrant(granted)
             if granted {
                 self.peerService.start(); self.startHeartbeat()
             } else if self.isOnline {
@@ -227,7 +249,7 @@ final class AppModel: ObservableObject {
     func refreshLocalNetworkStatus() {
         guard peerSharingEnabled else { localNetworkGranted = true; return }
         guard hasRequestedLocalNetwork else { localNetworkGranted = false; return }
-        lnAuth.check { [weak self] granted in self?.localNetworkGranted = granted }
+        lnAuth.check { [weak self] granted in self?.recordLocalNetworkGrant(granted) }
     }
 
     /// Action for the Settings "Requires device permission" button: ask iOS the first time,
