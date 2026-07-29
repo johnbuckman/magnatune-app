@@ -294,12 +294,26 @@ with `afconvert -f caff -d opus in.wav out.caf`; a real Ogg‑Opus with
 - ✅ **Released as v0.2.0** (2026-07-21): notarized universal DMG + zipped .app on the GitHub
   release, and the DMG is served at `magnatune.com/downloads/magnatune-osx.dmg` (committed to
   navim4 `downloads/`, gitignore-whitelisted) and linked from the web player's Settings → Apps
-  ("Magnatune for OSX"). **Release recipe:** bump `MARKETING_VERSION` in `project.yml` →
+  ("Magnatune for OSX").
+- ⚠️ **ALWAYS bump `MARKETING_VERSION` (and `CURRENT_PROJECT_VERSION`) for EVERY build you hand
+  John — even a no-code-change rebuild.** Never ship two different builds with the same version.
+  A v0.2.1 rebuild that reused the version once cost a long "is the device even running the new
+  binary?" debug (an old build was still installed and read identically in Settings → About).
+  Unique versions make "which build am I on?" answerable at a glance. This is the FIRST step of
+  any release, before `xcodegen generate`.
+- **Release recipe (macOS):** bump `MARKETING_VERSION` in `project.yml` →
   `xcodegen generate` → `./build-osx-dmg.sh` (Developer ID "Vid Tadel", notary profile
   `bping-notary`; drops `~/Desktop/Magnatune-v<V>.dmg` + `.app`, Gatekeeper "Notarized
   Developer ID") → `gh release create` with the DMG + a `ditto`-zipped .app → copy the DMG into
   `~/navim4/downloads/` and bump the `app/index.html` `?v=`. ⚠️ navim4 is pushed but **prod
   needs a `git pull`** to serve the new DMG/settings (no ssh to prod from this Mac).
+- **Release recipe (unsigned iOS IPA for sideloading):** bump versions → `xcodegen generate` →
+  `xcodebuild -project Magnatune.xcodeproj -scheme Magnatune -configuration Release -destination
+  'generic/platform=iOS' -derivedDataPath build-ios-unsigned CODE_SIGNING_ALLOWED=NO
+  CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" build` →
+  `mkdir Payload && cp -R build-ios-unsigned/Build/Products/Release-iphoneos/Magnatune.app
+  Payload/ && zip -qry Magnatune-v<V>-unsigned.ipa Payload` → `gh release create v<V> --target
+  main Magnatune-v<V>-unsigned.ipa`. iSideload/AltStore signs it with the installer's Apple ID.
 
 ---
 
