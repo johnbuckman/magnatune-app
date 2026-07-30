@@ -388,7 +388,24 @@ struct RootView: View {
 
     @ViewBuilder private var content: some View {
         if !model.catalogReady {
-            ContentUnavailableView("Loading catalog…", systemImage: "music.note")
+            // Startup screen: the mascot with clear "loading" text so it's obvious the app is
+            // working (not stuck) while the catalog is being prepared.
+            VStack(spacing: 14) {
+                Image("LaunchLogo")
+                    .resizable().scaledToFit()
+                    .frame(maxWidth: 200, maxHeight: 200)
+                    .accessibilityHidden(true)
+                Text("Magnatune is loading…")
+                    .font(.title3.weight(.semibold))
+                Text("Please wait — this only takes a moment.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                ProgressView()
+                    .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding()
         } else {
             switch selection {
             case .popular: PopularView()

@@ -44,8 +44,11 @@ enum StreamQuality: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Non-member (free) stream: the end-of-track announcement AAC file.
-    static let freeFile: (suffix: String, ext: String) = ("_spoken", "m4a")
+    /// Non-member (free) stream: the end-of-track announcement. Opus (40 kbps) is streamed by
+    /// default — same as the member tiers — with the AAC file as the playback-failure fallback
+    /// (`AudioPlayer` sets `allowOpus: false` after an Opus item fails to decode).
+    static let freeOpusFile: (suffix: String, ext: String) = ("_spoken", "opus")  // 40 kbps Opus advert
+    static let freeFile:     (suffix: String, ext: String) = ("_spoken", "m4a")   // AAC advert (Opus fallback)
 
     /// UserDefaults key for the persisted choice.
     static let defaultsKey = "stream.quality"
@@ -154,9 +157,9 @@ enum URLBuilder {
     // MARK: Quality-resolved streaming (Opus, with AAC fallback on playback failure)
 
     /// The stream URL for a track. Members get the Opus file for their tier; non-members get
-    /// the free `_spoken.m4a` advert. When `allowOpus` is false — set by `AudioPlayer` after an
-    /// Opus stream has actually failed to play on this device — members get the tier's AAC file
-    /// instead. There is deliberately NO pre-flight existence probe: a genuinely missing or
+    /// the free `_spoken.opus` advert (also Opus now). When `allowOpus` is false — set by
+    /// `AudioPlayer` after an Opus stream has actually failed to play on this device — members
+    /// get the tier's AAC file and non-members get the `_spoken.m4a` advert instead. There is deliberately NO pre-flight existence probe: a genuinely missing or
     /// undecodable Opus file is caught by the playback-failure fallback in
     /// `AudioPlayer.handleItemFailure`, which tests real playback (not just a HEAD), adds no
     /// latency, and — unlike a HEAD probe — can't be defeated by an auth/transport hiccup that
@@ -168,7 +171,7 @@ enum URLBuilder {
         if isMember {
             file = allowOpus ? quality.memberFile : quality.aacFallbackFile
         } else {
-            file = StreamQuality.freeFile
+            file = allowOpus ? StreamQuality.freeOpusFile : StreamQuality.freeFile
         }
         return mediaURL(artistName: artistName, albumName: albumName, song: song, suffix: file.suffix, ext: file.ext)
     }

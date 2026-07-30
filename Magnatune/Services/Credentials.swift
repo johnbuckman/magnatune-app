@@ -19,7 +19,11 @@ final class Credentials: ObservableObject {
     @Published private(set) var isMember: Bool = false
 
     init() {
-        username = UserDefaults.standard.string(forKey: "membership.username") ?? ""
+        // Prefer the keychain copy of the username (it rides iCloud Keychain, so it survives a
+        // reinstall); fall back to the local UserDefaults mirror. Keep the mirror in sync.
+        let stored = keychainRead(usernameAccount)
+        username = stored ?? UserDefaults.standard.string(forKey: "membership.username") ?? ""
+        if let stored, !stored.isEmpty { UserDefaults.standard.set(stored, forKey: "membership.username") }
         hasPassword = (readPassword() != nil)
         isMember = !username.isEmpty && hasPassword
     }
@@ -27,6 +31,7 @@ final class Credentials: ObservableObject {
     func save(username: String, password: String) {
         self.username = username
         UserDefaults.standard.set(username, forKey: "membership.username")
+        keychainWrite(usernameAccount, username)   // durable copy — survives reinstall via iCloud Keychain
         writePassword(password)
         hasPassword = !password.isEmpty
         // save() is only called by Settings after a successful server verify.
@@ -36,6 +41,7 @@ final class Credentials: ObservableObject {
     func clear() {
         username = ""
         UserDefaults.standard.removeObject(forKey: "membership.username")
+        keychainDelete(usernameAccount)
         deletePassword()
         hasPassword = false
         isMember = false
@@ -120,10 +126,56 @@ final class Credentials: ObservableObject {
 
     // MARK: Keychain primitives
 
-    private func baseQuery() -> [String: Any] {
+    // Stored as iCloud-Keychain **synchronizable** items, so the login survives an app
+    // reinstall (restored from iCloud on the same Apple ID with iCloud Keychain on) and syncs
+    // across the user's devices — a plain keychain item is wiped on uninstall on iOS. Builds
+    // without a keychain access group (the notarized Developer-ID Mac build) can't add
+    // synchronizable items, so we fall back to a plain login-keychain item there, which on
+    // macOS already persists across reinstalls. Reads/deletes match either kind.
+    private let usernameAccount = "membership.username"
+
+    private func query(account acct: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service,
-         kSecAttrAccount as String: account]
+         kSecAttrAccount as String: acct]
+    }
+
+    private func keychainRead(_ acct: String) -> String? {
+        var q = query(account: acct)
+        q[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny   // sync OR legacy non-sync
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(q as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data,
+              let s = String(data: data, encoding: .utf8) else {
+            if status != errSecItemNotFound {
+                print("[Credentials] keychain read(\(acct)) failed: OSStatus \(status)")
+            }
+            return nil
+        }
+        return s
+    }
+
+    private func keychainWrite(_ acct: String, _ value: String) {
+        keychainDelete(acct)                      // drop any prior copy (sync or non-sync)
+        // Prefer an iCloud-Keychain (synchronizable) item; fall back to a plain item on
+        // builds/OSes that reject synchronizable (no keychain access group).
+        for synchronizable in [true, false] {
+            var q = query(account: acct)
+            q[kSecValueData as String] = Data(value.utf8)
+            q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            if synchronizable { q[kSecAttrSynchronizable as String] = kCFBooleanTrue }
+            let status = SecItemAdd(q as CFDictionary, nil)
+            if status == errSecSuccess { return }
+            if !synchronizable { print("[Credentials] keychain write(\(acct)) failed: OSStatus \(status)") }
+        }
+    }
+
+    private func keychainDelete(_ acct: String) {
+        var q = query(account: acct)
+        q[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
+        SecItemDelete(q as CFDictionary)
     }
 
     /// In-memory copy of the password for this launch. The keychain is the source of truth
@@ -135,36 +187,18 @@ final class Credentials: ObservableObject {
 
     private func readPassword() -> String? {
         if let cachedPassword { return cachedPassword }
-        var q = baseQuery()
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(q as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data,
-              let pw = String(data: data, encoding: .utf8) else {
-            if status != errSecItemNotFound {
-                print("[Credentials] keychain read failed: OSStatus \(status)")
-            }
-            return nil
-        }
+        let pw = keychainRead(account)
         cachedPassword = pw
         return pw
     }
 
     private func writePassword(_ password: String) {
-        deletePassword()            // clears the cache too — so set it AFTER
-        cachedPassword = password
-        var q = baseQuery()
-        q[kSecValueData as String] = Data(password.utf8)
-        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        let status = SecItemAdd(q as CFDictionary, nil)
-        if status != errSecSuccess {
-            print("[Credentials] keychain write failed: OSStatus \(status)")
-        }
+        cachedPassword = password    // hold it even if the keychain write below fails
+        keychainWrite(account, password)
     }
 
     private func deletePassword() {
         cachedPassword = nil
-        SecItemDelete(baseQuery() as CFDictionary)
+        keychainDelete(account)
     }
 }
