@@ -15,7 +15,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 APPNAME="Magnatune"
-ENT="$ROOT/Magnatune/App/Magnatune.entitlements"
+# Mac Catalyst uses the iOS entitlement model, so keychain-access-groups /
+# application-identifier are provisioning-profile-restricted. A Developer ID build has no
+# embedded provisioning profile, so signing with the dev entitlements (App/Magnatune.entitlements,
+# which carries the app sandbox + keychain-access-groups) makes AMFI refuse to spawn the app
+# ("no eligible provisioning profiles found", launchd errno 163). Sign the Developer ID build
+# with a non-sandboxed, profile-free set instead — a non-sandboxed Mac app reaches the login
+# keychain without an access group. Override with MAG_ENTITLEMENTS=... if you ever embed a
+# Developer ID provisioning profile and want the sandbox back.
+ENT="${MAG_ENTITLEMENTS:-$ROOT/Magnatune/App/Magnatune-DeveloperID.entitlements}"
 DERIVED="$ROOT/build-osx"
 PRODUCT="$DERIVED/Build/Products/Release-maccatalyst/$APPNAME.app"
 DESKTOP="$HOME/Desktop"

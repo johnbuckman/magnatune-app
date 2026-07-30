@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Entitlements for the Developer ID (notarized, outside-the-App-Store) Mac Catalyst build.
+
+     Deliberately DIFFERENT from App/Magnatune.entitlements (the dev/automatic-signing set):
+     Mac Catalyst uses the iOS entitlement model, so `keychain-access-groups` and
+     `application-identifier` are provisioning-profile-restricted. A Developer ID build has
+     no embedded provisioning profile, so signing with those entitlements makes AMFI refuse
+     to spawn the app ("no eligible provisioning profiles found" -> launchd errno 163).
+
+     This set is non-sandboxed and profile-free, so it launches. A non-sandboxed Mac app
+     reaches the login keychain without an access group, so Credentials.swift keeps working.
+     Keep the dev entitlements (sandbox + keychain-access-groups) for Xcode dev/device builds,
+     which get a development provisioning profile that authorizes them. -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+</dict>
+</plist>
