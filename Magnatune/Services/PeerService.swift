@@ -129,7 +129,16 @@ final class PeerService: ObservableObject {
     var onControl: ((PeerControl) -> Void)?
 
     private let instanceID = UUID().uuidString
-    private var deviceName: String
+    /// Resolves the human-friendly device name. Evaluated LAZILY (see `deviceName`) because
+    /// the current implementation reads `ProcessInfo.processInfo.hostName`, and *reading
+    /// hostName resolves the device's `.local` name over mDNS, which trips the iOS Local
+    /// Network permission prompt*. If we evaluated it eagerly in `init` (called at app
+    /// startup) the prompt would appear over a blank window before the first frame — exactly
+    /// the deferral this whole class is built to avoid.
+    private let deviceNameProvider: () -> String
+    /// The advertised name. First touched in `start()`, so `hostName` — and therefore the
+    /// Local Network prompt — is only reached once the user has actually enabled sharing.
+    private lazy var deviceName: String = deviceNameProvider()
     private(set) var enabled = false
 
     private var listener: NWListener?
@@ -144,8 +153,11 @@ final class PeerService: ObservableObject {
     private let netQueue = DispatchQueue(label: "com.magnatune.peer")
     private let log = Logger(subsystem: "com.magnatune.player", category: "peer")
 
-    init(deviceName: String) {
-        self.deviceName = deviceName
+    /// `deviceName` is an `@autoclosure` so the call site can stay `PeerService(deviceName:
+    /// AppModel.currentDeviceName())` while the actual `hostName` read is deferred until the
+    /// name is first needed in `start()` — keeping the Local Network prompt off the launch path.
+    init(deviceName: @autoclosure @escaping () -> String) {
+        self.deviceNameProvider = deviceName
     }
 
     // MARK: Lifecycle
