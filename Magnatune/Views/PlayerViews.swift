@@ -132,15 +132,24 @@ struct MiniPlayer: View {
         VStack(spacing: 4) {
             if let remote { remoteBanner(remote) }
             HStack(spacing: 12) {
-                artwork(displayTrack)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(displayTrack?.song.name ?? "Not Playing")
-                        .font(.callout).lineLimit(1)
-                        .foregroundStyle(hasTrack ? .primary : .secondary)
-                    Text(displayTrack?.artistName ?? "Magnatune")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                // Only the artwork + title area expands to Now Playing. The controls to the
+                // right (AirPlay, volume, transport) must NOT be covered by this tap gesture:
+                // AirPlay is a UIKit AVRoutePickerView, and a SwiftUI onTapGesture spanning it
+                // would swallow the tap (opening Now Playing instead of the route picker).
+                HStack(spacing: 12) {
+                    artwork(displayTrack)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(displayTrack?.song.name ?? "Not Playing")
+                            .font(.callout).lineLimit(1)
+                            .foregroundStyle(hasTrack ? .primary : .secondary)
+                        Text(displayTrack?.artistName ?? "Magnatune")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer()
+                .contentShape(Rectangle())
+                .onTapGesture { if hasTrack { onExpand() } }
+
                 if !isPhone && remote == nil { volumeControl }
                 if isPhone && remote == nil { volumeButton }
                 if remote == nil { airplayPill }
@@ -153,8 +162,6 @@ struct MiniPlayer: View {
                 transportButton(playPauseIcon) { transport(.playPause) }.disabled(!hasTrack)
                 transportButton("forward.fill") { transport(.next) }.disabled(!hasTrack)
             }
-            .contentShape(Rectangle())
-            .onTapGesture { if hasTrack { onExpand() } }
 
             progressRow
         }
