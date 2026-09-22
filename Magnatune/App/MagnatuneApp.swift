@@ -1,12 +1,37 @@
 import SwiftUI
 
+/// User-selectable appearance. `.system` follows the device's Light/Dark setting;
+/// `.light` / `.dark` force one. Stored in UserDefaults under `AppAppearance.key`.
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .system: return "System"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
+        }
+    }
+    /// nil = follow the system; otherwise force the chosen scheme.
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+    static let key = "appearance"
+}
+
 @main
 struct MagnatuneApp: App {
     @StateObject private var model = AppModel()
+    @AppStorage(AppAppearance.key) private var appearanceRaw = AppAppearance.system.rawValue
 
     var body: some Scene {
         WindowGroup {
             RootView()
+                .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
                 .environmentObject(model)
                 .environmentObject(model.userStore)
                 .environmentObject(model.credentials)

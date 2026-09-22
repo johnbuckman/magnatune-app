@@ -6,6 +6,10 @@ struct SettingsView: View {
     var onShowHelp: () -> Void = {}
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var creds: Credentials
+    @EnvironmentObject var user: UserStore
+    @State private var albumCount = 0
+    @State private var songCount = 0
+    @State private var playlistCount = 0
     @State private var username = ""
     @State private var password = ""
     @State private var checking = false
@@ -18,6 +22,7 @@ struct SettingsView: View {
     @State private var downloadsBytes: Int64 = 0
     @State private var showWhyNotEvil = false
     @State private var showFoundersRant = false
+    @AppStorage(AppAppearance.key) private var appearanceRaw = AppAppearance.system.rawValue
     @AppStorage("audio.cache.enabled") private var audioCacheEnabled = true
     @AppStorage("crossfade.enabled") private var crossfadeEnabled = true
     @AppStorage("crossfade.duration") private var crossfadeDuration = 6.0
@@ -28,6 +33,20 @@ struct SettingsView: View {
     private let songDownloadFormats: [(String, String)] = [("mp3", "MP3 — high quality"), ("ogg", "OGG"), ("flac", "FLAC — lossless"), ("wav", "WAV — lossless")]
 
     enum SignInResult { case success, failure }
+
+    private var favoritesCount: Int {
+        user.favoriteSongIDs.count + user.favoriteAlbumIDs.count + user.favoriteArtistIDs.count
+    }
+    private var dislikedCount: Int {
+        user.dislikedSongIDs.count + user.dislikedAlbumIDs.count
+            + user.dislikedArtistIDs.count + user.dislikedGenreIDs.count
+    }
+
+    private func refreshCounts() {
+        albumCount = model.catalog?.albumCount() ?? 0
+        songCount = model.catalog?.songCount() ?? 0
+        playlistCount = user.playlists().count
+    }
 
     var body: some View {
         Form {
@@ -66,6 +85,7 @@ struct SettingsView: View {
                         Text("Without a membership, tracks stream for free but include a spoken announcement at the end of each track.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    Link("Get a membership", destination: URL(string: "https://magnatune.com/member/signup")!)
                 }
             }
 
@@ -84,6 +104,17 @@ struct SettingsView: View {
                 }
             } header: { Text("Playback") } footer: {
                 Text("Smoothly fades the end of each track into the next, over the chosen duration (1–10 seconds).")
+            }
+
+            groupDivider
+
+            Section {
+                Picker("Theme", selection: $appearanceRaw) {
+                    ForEach(AppAppearance.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+            } header: { Text("Appearance") } footer: {
+                Text("“System” follows your device’s Light/Dark setting. Choose Light or Dark to override it.")
             }
 
             groupDivider
@@ -189,10 +220,19 @@ struct SettingsView: View {
                         }
                     }
                 } else {
-                    LabeledRow("Status", value: "Up to date")
+                    LabeledRow("Music catalog", value: "\(albumCount.formatted()) albums · \(songCount.formatted()) songs")
                 }
             } header: { Text("Catalog") } footer: {
-                Text("New catalog versions from magnatune.com download automatically in the background.")
+                Text("Kept up to date automatically — new catalog versions from magnatune.com download in the background.")
+            }
+
+            groupDivider
+
+            Section {
+                LabeledRow("On this device", value:
+                    "\(favoritesCount) favorites · \(playlistCount) playlists · \(dislikedCount) disliked")
+            } header: { Text("Library") } footer: {
+                Text("Your favorites, playlists, and dislikes are stored on this device.")
             }
 
             groupDivider
@@ -231,12 +271,29 @@ struct SettingsView: View {
 
             groupDivider
 
+            Section {
+                Link("Magnatune for Mac", destination: URL(string: "https://github.com/johnbuckman/magnatune-app/releases")!)
+                Link("Magnatune for Android", destination: URL(string: "https://github.com/johnbuckman/magnatune-android/releases")!)
+            } header: { Text("Apps") } footer: {
+                Text("Magnatune also has native players for Mac and Android, published on GitHub releases.")
+            }
+
+            groupDivider
+
             Section("About") {
                 LabeledRow("App", value: "Magnatune Player \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
                 Text("Music licensed Creative Commons by Magnatune (magnatune.com).")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Why we are not evil") { showWhyNotEvil = true }
                 Button("Founder's Rant") { showFoundersRant = true }
+                Link("FAQ", destination: URL(string: "https://magnatune.com/info/faq_buyers")!)
+                Link("Music licensing", destination: URL(string: "https://magnatune.com/info/licensing")!)
+                Link("Give away our music", destination: URL(string: "https://magnatune.com/info/give")!)
+                Link("Podcast our music", destination: URL(string: "https://magnatune.com/info/podcast")!)
+                Link("Gift cards", destination: URL(string: "https://magnatune.com/buy/gift_cards")!)
+                Link("Terms of use", destination: URL(string: "https://magnatune.com/terms_of_use")!)
+                Link("APIs, RSS & XML", destination: URL(string: "https://magnatune.com/info/api")!)
+                Link("Contact Magnatune", destination: URL(string: "https://magnatune.com/info/contact")!)
                 Button {
                     onShowHelp()
                 } label: {
@@ -246,7 +303,8 @@ struct SettingsView: View {
         }
         .groupedFormCompat()
         .navigationTitle("Settings")
-        .onAppear { username = creds.username; refreshCacheSize(); model.refreshLocalNetworkStatus() }
+        .onAppear { username = creds.username; refreshCacheSize(); model.refreshLocalNetworkStatus(); refreshCounts() }
+        .onChange(of: model.catalogReady) { _ in refreshCounts() }
         .task { await model.checkCatalogUpdate() }
         .overlay {
             if showWhyNotEvil {

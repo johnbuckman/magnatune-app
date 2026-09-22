@@ -60,6 +60,12 @@ final class CatalogStore {
         return Dictionary(uniqueKeysWithValues: pairs)
     }
 
+    // MARK: Counts
+
+    /// Total albums / songs in the catalog (for the Settings "Music catalog" summary).
+    func albumCount() -> Int { read { try Album.fetchCount($0) } ?? 0 }
+    func songCount() -> Int { read { try Song.fetchCount($0) } ?? 0 }
+
     // MARK: Albums
 
     func allAlbums() -> [Album] {
