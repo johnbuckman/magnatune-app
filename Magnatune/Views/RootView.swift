@@ -68,12 +68,15 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Compact (iPhone) when the width is phone-sized OR the size class is compact.
-            // (Mac Catalyst always reports .regular, so the width check drives the
-            // iPhone-sized preview window; real iPhones also hit the size-class check.)
-            // 700, not 600: the regular layout's player controls overflow the right
-            // edge around ~640pt, so switch to the compact layout before that.
-            let compact = hSizeClass == .compact || geo.size.width < 700
+            // Compact (iPhone) layout when the width is phone-sized OR the size class is
+            // compact — AND always on iPhone. Plus/Max phones report a .regular size class
+            // and a >700 width in landscape, which would otherwise drop them into the
+            // iPad/Mac layout, whose wide player controls run off the right edge on a phone.
+            // (Mac Catalyst reports .regular, so there the width check drives the compact
+            // preview window; 700 rather than 600 because the regular layout's player
+            // controls start to overflow around ~640pt.)
+            let compact = UIDevice.current.userInterfaceIdiom == .phone
+                || hSizeClass == .compact || geo.size.width < 700
             Group {
                 if compact { compactLayout } else { regularLayout }
             }
