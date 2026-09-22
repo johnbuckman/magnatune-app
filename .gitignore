@@ -20,3 +20,8 @@ build-sim/
 
 # Per-developer device list for dist-iter.sh (CoreDevice IDs; not shared)
 dist-devices.local
+
+# Local test builds / release artifacts
+build-catalyst-test/
+build-iossim-test/
+*.ipa

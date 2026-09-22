@@ -198,14 +198,32 @@ final class PeerService: ObservableObject {
 
     // MARK: Listener (advertise + accept)
 
+    /// DNS TXT wire format: each entry is a length byte followed by "key=value" UTF-8
+    /// (truncated to 255 bytes). Used on iOS 15 where NWTXTRecord.data is unavailable.
+    private static func encodeTXTRecord(_ dict: [String: String]) -> Data {
+        var out = Data()
+        for (k, v) in dict {
+            let bytes = Array("\(k)=\(v)".utf8).prefix(255)
+            out.append(UInt8(bytes.count))
+            out.append(contentsOf: bytes)
+        }
+        return out
+    }
+
     private func startListener() {
         do {
             let params = NWParameters.tcp
             params.includePeerToPeer = true
             let listener = try NWListener(using: params)
-            let txt = NWTXTRecord(["id": instanceID, "name": deviceName])
+            let txtData: Data
+            if #available(iOS 16.0, *) {
+                txtData = NWTXTRecord(["id": instanceID, "name": deviceName]).data
+            } else {
+                // NWTXTRecord.data is iOS 16+; build the DNS TXT wire format by hand.
+                txtData = Self.encodeTXTRecord(["id": instanceID, "name": deviceName])
+            }
             listener.service = NWListener.Service(name: instanceID, type: Self.serviceType,
-                                                  domain: nil, txtRecord: txt.data)
+                                                  domain: nil, txtRecord: txtData)
             listener.newConnectionHandler = { [weak self] conn in
                 Task { @MainActor in self?.adopt(PeerLink(connection: conn, initiatedByUs: false)) }
             }

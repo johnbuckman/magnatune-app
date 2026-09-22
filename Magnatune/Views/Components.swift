@@ -134,7 +134,7 @@ struct ArtistPhoto: View {
             }
             .aspectRatio(contentMode: .fill)
             .id(url)                                  // reload when the fallback URL changes
-            .onChange(of: artist.id) { _, _ in attempt = 0 }   // reset when the row is reused
+            .onChange(of: artist.id) { _ in attempt = 0 }   // reset when the row is reused
     }
 }
 
@@ -342,7 +342,11 @@ struct AddToPlaylistButton: View {
         }
         .buttonStyle(.borderless)
         .help(onPlaylist ? "Remove from playlist" : "Add to playlist")
-        .sheet(isPresented: $show) { AddToPlaylistSheet(songIDs: ids) }
+        // Overlay, not `.sheet`: a sheet presented from this deep-in-navigation control does
+        // not dismiss on Mac Catalyst when its binding flips. See InfoOverlay.
+        .overlay {
+            if show { AddToPlaylistSheet(onClose: { show = false }, songIDs: ids) }
+        }
     }
 }
 
@@ -388,14 +392,35 @@ struct SongDownloadButton: View {
 
 struct AddToPlaylistSheet: View {
     @EnvironmentObject var user: UserStore
-    @Environment(\.dismiss) private var dismiss
+    /// Explicit close from the presenter (reliable inside a NavigationStack on Catalyst,
+    /// unlike @Environment(\.dismiss)).
+    var onClose: () -> Void
     let songIDs: [Int64]
     @State private var newName = ""
     @State private var rows: [UserStore.PlaylistRow] = []
     @FocusState private var nameFocused: Bool
 
     var body: some View {
-        NavigationStack {
+        ZStack {
+            Color.black.opacity(0.22).ignoresSafeArea().onTapGesture { onClose() }
+            card
+                .frame(maxWidth: 520, maxHeight: 560)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Color(.systemBackground)))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .shadow(color: .black.opacity(0.3), radius: 20)
+                .padding(24)
+        }
+    }
+
+    private var card: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(songIDs.count == 1 ? "Add to Playlist" : "Add \(songIDs.count) Songs").font(.headline)
+                Spacer()
+                Button("Done") { onClose() }.keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal).padding(.vertical, 12)
+            Divider()
             List {
                 Section("Create playlist:") {
                     HStack {
@@ -426,9 +451,6 @@ struct AddToPlaylistSheet: View {
                     }
                 }
             }
-            .navigationTitle(songIDs.count == 1 ? "Add to Playlist" : "Add \(songIDs.count) Songs")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task {
                 rows = user.playlists()
                 // Brief delay so the sheet is fully presented before we focus (otherwise
@@ -437,12 +459,11 @@ struct AddToPlaylistSheet: View {
                 nameFocused = true
             }
         }
-        .presentationDetents([.medium, .large])
     }
 
     private func add(to playlistID: Int64) {
         for s in songIDs { user.addSong(s, toPlaylist: playlistID) }
-        dismiss()
+        onClose()
     }
 }
 
@@ -472,7 +493,7 @@ struct SongRow: View {
             leading
             VStack(alignment: .leading, spacing: 2) {
                 if let target = albumSong {
-                    NavigationLink(value: target) { songName }.buttonStyle(.plain)
+                    NavLink(value: target) { songName }.buttonStyle(.plain)
                 } else {
                     songName
                 }
@@ -482,10 +503,10 @@ struct SongRow: View {
                         // album → album page (with this song highlighted). Web parity.
                         HStack(spacing: 6) {
                             if let a = artistForChip {
-                                NavigationLink(value: a) { chip(a.name, "person") }.buttonStyle(.plain)
+                                NavLink(value: a) { chip(a.name, "person") }.buttonStyle(.plain)
                             }
                             if let target = albumSong {
-                                NavigationLink(value: target) { chip(track.album.name, "opticaldisc") }.buttonStyle(.plain)
+                                NavLink(value: target) { chip(track.album.name, "opticaldisc") }.buttonStyle(.plain)
                             }
                         }
                     } else {
@@ -515,8 +536,9 @@ struct SongRow: View {
     }
 
     private var songName: some View {
-        Text(track.song.name).lineLimit(1)
+        Text(track.song.name)
             .fontWeight(isCurrent ? .semibold : .regular)
+            .lineLimit(1)
             .foregroundStyle(isCurrent ? Color.accentColor : .primary)
     }
 
@@ -538,7 +560,7 @@ struct SongRow: View {
             let cover = CoverImage(artistName: track.artistName, albumName: track.album.name, points: 40)
                 .frame(width: art, height: art)
             if let target = albumSong {
-                NavigationLink(value: target) { cover }.buttonStyle(.plain)
+                NavLink(value: target) { cover }.buttonStyle(.plain)
             } else {
                 cover
             }
@@ -550,7 +572,9 @@ struct SongRow: View {
     }
 }
 
-/// Simple wrapping layout for chips/tags.
+/// Simple wrapping layout for chips/tags. iOS 16+ only (the Layout protocol);
+/// call sites use `WrapChips`, which falls back to a scrolling row on iOS 15.
+@available(iOS 16.0, *)
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 

@@ -51,15 +51,13 @@ struct RootView: View {
     @EnvironmentObject var audio: AudioPlayer
     @State private var selection: SidebarItem = .popular     // drives the detail root
     @State private var navHighlight: SidebarItem? = nil      // visual-only override while drilled in
-    @State private var path = NavigationPath()
+    @StateObject private var router = NavRouter()            // drill-down reset/push, host-agnostic
     @State private var showNowPlaying = false
     @State private var sidebarHeight: CGFloat = 800          // measured column height
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var isCompact = false                     // mirrors layout mode for sheets
-    @State private var didRestorePath = false                // one-shot guard for restoring the drill-down
 
     private static let kSection = "nav.section"
-    private static let kPath = "nav.path"
 
     init() {
         // Restore the top-level page immediately (no flash of Popular). The drill-down is
@@ -82,30 +80,23 @@ struct RootView: View {
             .environment(\.isPhoneLayout, compact)
             .frame(width: geo.size.width, height: geo.size.height)
             .onAppear { isCompact = compact }
-            .onChange(of: compact) { _, v in isCompact = v }
+            .onChange(of: compact) { v in isCompact = v }
         }
         .statusBarHidden(true)
-        .persistentSystemOverlays(.hidden)
-        .onChange(of: path) { _, newPath in
-            if newPath.isEmpty { navHighlight = nil }
-            persistPath(newPath)
-        }
-        .onChange(of: selection) { _, s in
+        .hideSystemOverlays()
+        .onChange(of: selection) { s in
             UserDefaults.standard.set(s.rawValue, forKey: Self.kSection)
-        }
-        .onChange(of: model.catalogReady) { _, ready in
-            if ready { restoreNavPathIfNeeded() }
         }
         .sheet(isPresented: $showNowPlaying) {
             NowPlayingView(
                 onOpenAlbum: { album in
                     showNowPlaying = false
-                    DispatchQueue.main.async { path.append(album) }
+                    router.push(album)
                 },
                 onOpenArtist: { album in
                     showNowPlaying = false
                     if let artist = model.catalog?.artist(id: album.artistId) {
-                        DispatchQueue.main.async { path.append(artist) }
+                        router.push(artist)
                     }
                 }
             )
@@ -114,7 +105,8 @@ struct RootView: View {
             .environmentObject(model.audio)
         }
         .background(MacWindowConfigurator())
-        .onAppear { model.resumePeerSharingIfGranted(); restoreNavPathIfNeeded() }
+        .environmentObject(router)
+        .onAppear { model.resumePeerSharingIfGranted() }
         .alert(model.localNetworkDenied ? "Local Network Access Needed" : "Find Magnatune Players Nearby",
                isPresented: $model.showLocalNetworkPrimer) {
             if model.localNetworkDenied {
@@ -132,22 +124,14 @@ struct RootView: View {
     }
 
     /// Shared navigation stack (content + drill-down destinations), reused by both the
-    /// sidebar (regular) and tab-bar (compact) layouts.
-    private var mainNavStack: some View {
-        NavigationStack(path: $path) {
-            content
-                .background(InteractivePopGestureEnabler())   // swipe-back works even with hidden nav bar
-                .toolbar(.hidden, for: .navigationBar)
-                .navigationDestination(for: Artist.self) { ArtistDetailView(artist: $0).onAppear { highlight(.artists) } }
-                .navigationDestination(for: Album.self) { AlbumDetailView(album: $0).onAppear { highlight(nil) } }
-                .navigationDestination(for: AlbumSong.self) { AlbumDetailView(album: $0.album, highlightSongID: $0.songID).onAppear { highlight(nil) } }
-                .navigationDestination(for: Genre.self) { GenreArtistsView(genre: $0).onAppear { highlight(.genres) } }
-                .navigationDestination(for: Tag.self) { TagAlbumsView(tag: $0).onAppear { highlight(.tags) } }
-                .navigationDestination(for: CatalogPlaylist.self) { CatalogPlaylistDetailView(playlist: $0).onAppear { highlight(nil) } }
-                .navigationDestination(for: UserPlaylistRef.self) { PlaylistDetailView(playlistID: $0.id, name: $0.name).onAppear { highlight(.myPlaylists) } }
+    /// sidebar (regular) and tab-bar (compact) layouts. iOS 16+ gets the full value-based
+    /// NavigationStack (ModernNavHost); iOS 15 falls back to a NavigationView-based host.
+    @ViewBuilder private var mainNavStack: some View {
+        if #available(iOS 16.0, *) {
+            ModernNavHost(router: router, navHighlight: $navHighlight) { content }
+        } else {
+            LegacyNavHost(router: router) { content }
         }
-        // Hide the default grouped List background so List pages match the ScrollView pages.
-        .scrollContentBackground(.hidden)
     }
 
     // MARK: Regular layout (Mac / iPad) — floating sidebar card + content column
@@ -237,7 +221,7 @@ struct RootView: View {
         return Button {
             navHighlight = nil
             selection = item
-            path = NavigationPath()
+            router.reset()
         } label: {
             VStack(spacing: 3) {
                 Image(systemName: item.icon).font(.system(size: 19))
@@ -303,9 +287,9 @@ struct RootView: View {
         .background(GeometryReader { g in
             Color.clear
                 .onAppear { sidebarHeight = g.size.height }
-                .onChange(of: g.size.height) { _, h in sidebarHeight = h }
+                .onChange(of: g.size.height) { h in sidebarHeight = h }
         })
-        .focusEffectDisabled()
+        .disableFocusEffectCompat()
     }
 
     /// A sidebar row. We draw the highlight ourselves (not via List selection) so that
@@ -318,7 +302,7 @@ struct RootView: View {
             // section root, so tapping the current section while deep in it still works.
             navHighlight = nil
             selection = item
-            path = NavigationPath()
+            router.reset()
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: item.icon)
@@ -356,34 +340,7 @@ struct RootView: View {
     private func showHelp() {
         navHighlight = nil
         selection = .help
-        path = NavigationPath()
-    }
-
-    /// Update the sidebar highlight after the push settles (deferred to avoid mutating
-    /// state mid-navigation).
-    private func highlight(_ item: SidebarItem?) {
-        DispatchQueue.main.async { navHighlight = item }
-    }
-
-    /// Persist the current drill-down (encoded NavigationPath) so the app reopens on the
-    /// same page. Saved on every push/pop; the section is saved separately on change.
-    private func persistPath(_ p: NavigationPath) {
-        if let c = p.codable, let data = try? JSONEncoder().encode(c) {
-            UserDefaults.standard.set(data, forKey: Self.kPath)
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.kPath)
-        }
-    }
-
-    /// Restore the saved drill-down once, after the catalog is ready (the detail views
-    /// resolve their content from it). The section was already restored in init().
-    private func restoreNavPathIfNeeded() {
-        guard !didRestorePath, model.catalogReady else { return }
-        didRestorePath = true
-        guard let data = UserDefaults.standard.data(forKey: Self.kPath),
-              let rep = try? JSONDecoder().decode(NavigationPath.CodableRepresentation.self, from: data)
-        else { return }
-        path = NavigationPath(rep)
+        router.reset()
     }
 
     @ViewBuilder private var content: some View {
@@ -411,7 +368,7 @@ struct RootView: View {
             case .popular: PopularView()
             case .artists: ArtistsView()
             case .albums: AlbumsView()
-            case .genres: GenresView(onOpen: { path.append($0) })
+            case .genres: GenresView(onOpen: { router.push($0) })
             case .tags: TagsView()
             case .playlists: CatalogPlaylistsView()
             case .songs: SongsView()
@@ -422,7 +379,7 @@ struct RootView: View {
             case .help: HelpView(onNavigate: { item in
                 navHighlight = nil
                 selection = item
-                path = NavigationPath()
+                router.reset()
             })
             }
         }

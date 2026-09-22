@@ -124,7 +124,7 @@ struct SettingsView: View {
                 Toggle("Auto-download favorites", isOn: Binding(
                     get: { model.autoDownloadFavorites },
                     set: { model.setAutoDownloadFavorites($0); refreshCacheSize() }))
-                LabeledContent("Downloaded music") {
+                LabeledRow("Downloaded music") {
                     HStack(spacing: 12) {
                         Text(downloadsText).foregroundStyle(.secondary)
                         if downloadsBytes > 0 {
@@ -180,16 +180,16 @@ struct SettingsView: View {
 
             Section {
                 if !model.catalogReady {
-                    LabeledContent("Status", value: "Loading…")
+                    LabeledRow("Status", value: "Loading…")
                 } else if model.isRefreshing {
-                    LabeledContent("Status") {
+                    LabeledRow("Status") {
                         HStack(spacing: 8) {
                             Text("Updating…").foregroundStyle(.secondary)
                             ProgressView().controlSize(.small)
                         }
                     }
                 } else {
-                    LabeledContent("Status", value: "Up to date")
+                    LabeledRow("Status", value: "Up to date")
                 }
             } header: { Text("Catalog") } footer: {
                 Text("New catalog versions from magnatune.com download automatically in the background.")
@@ -198,7 +198,7 @@ struct SettingsView: View {
             groupDivider
 
             Section {
-                LabeledContent("Cached art & photos") {
+                LabeledRow("Cached art & photos") {
                     HStack(spacing: 12) {
                         Text(cacheText).foregroundStyle(.secondary)
                         if imageCacheBytes > 0 {
@@ -212,7 +212,7 @@ struct SettingsView: View {
                         }
                     }
                 }
-                LabeledContent("Cached music") {
+                LabeledRow("Cached music") {
                     HStack(spacing: 12) {
                         Text(audioCacheText).foregroundStyle(.secondary)
                         if audioCacheBytes > 0 {
@@ -232,7 +232,7 @@ struct SettingsView: View {
             groupDivider
 
             Section("About") {
-                LabeledContent("App", value: "Magnatune Player \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
+                LabeledRow("App", value: "Magnatune Player \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
                 Text("Music licensed Creative Commons by Magnatune (magnatune.com).")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Why we are not evil") { showWhyNotEvil = true }
@@ -244,24 +244,28 @@ struct SettingsView: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .groupedFormCompat()
         .navigationTitle("Settings")
         .onAppear { username = creds.username; refreshCacheSize(); model.refreshLocalNetworkStatus() }
         .task { await model.checkCatalogUpdate() }
-        .sheet(isPresented: $showWhyNotEvil) {
-            InfoSheet(title: "Why we are not evil") {
-                Text("Why Magnatune is not evil").font(.title3.bold())
-                ForEach(whyNotEvilPoints, id: \.self) { point in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("•").bold()
-                        Text(point)
+        .overlay {
+            if showWhyNotEvil {
+                InfoOverlay(title: "Why we are not evil", onClose: { showWhyNotEvil = false }) {
+                    Text("Why Magnatune is not evil").font(.title3.bold())
+                    ForEach(whyNotEvilPoints, id: \.self) { point in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text("•").bold()
+                            Text(point)
+                        }
                     }
                 }
             }
         }
-        .sheet(isPresented: $showFoundersRant) {
-            InfoSheet(title: "Founder's Rant") {
-                Text(foundersRantText)
+        .overlay {
+            if showFoundersRant {
+                InfoOverlay(title: "Founder's Rant", onClose: { showFoundersRant = false }) {
+                    Text(foundersRantText)
+                }
             }
         }
     }
@@ -313,29 +317,7 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - Info sheets (content from magnatune.com/info/whynotevil and /info/why)
-
-/// A scrollable, dismissible sheet with a title — used for the About info pages.
-struct InfoSheet<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    content
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }
-    }
-}
+// MARK: - Info page content (from magnatune.com/info/whynotevil and /info/why)
 
 let whyNotEvilPoints: [String] = [
     "Fantastic music: we work with artists directly, not with record labels, and all our music is hand-picked. On average, we accept 3% of submissions.",

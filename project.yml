@@ -2,7 +2,7 @@ name: Magnatune
 options:
   bundleIdPrefix: com.magnatune
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "15.0"
   createIntermediateGroups: true
   groupSortPosition: top
 
@@ -29,7 +29,7 @@ targets:
   Magnatune:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "15.0"
     sources:
       - path: Magnatune
     dependencies:

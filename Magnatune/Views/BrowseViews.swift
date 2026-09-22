@@ -40,7 +40,7 @@ struct SortMenu: View {
                     .labelStyle(.titleAndIcon)
                     .font(.callout)
             }
-            .menuStyle(.button)
+            .buttonMenuStyleCompat()
             .buttonStyle(.bordered)
             .fixedSize()
         } else {
@@ -81,7 +81,7 @@ struct GenrePicker: View {
                 .labelStyle(.titleAndIcon)
                 .font(.callout)
         }
-        .menuStyle(.button)
+        .buttonMenuStyleCompat()
         .buttonStyle(.bordered)
         .fixedSize()
     }
@@ -190,7 +190,7 @@ struct ArtistsView: View {
                 SortMenu(sort: $sort).padding(.trailing).padding(.bottom, 2)
             }
             List(filtered) { artist in
-                NavigationLink(value: artist) {
+                NavLink(value: artist) {
                     HStack(spacing: 12) {
                         ArtistPhoto(artist: artist, points: 44).frame(width: 44, height: 44).clipShape(Circle())
                             .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
@@ -204,7 +204,7 @@ struct ArtistsView: View {
         }
         .navigationTitle("Artists")
         .task { if artists.isEmpty { load() } }
-        .onChange(of: sort) { load() }
+        .onChange(of: sort) { _ in load() }
     }
 }
 
@@ -214,7 +214,7 @@ struct AlbumCell: View {
     let album: Album
     let artistName: String
     var body: some View {
-        NavigationLink(value: album) {
+        NavLink(value: album) {
             VStack(alignment: .leading, spacing: 6) {
                 CoverImage(artistName: artistName, albumName: album.name, points: 150)
                 Text(album.name).font(.callout).lineLimit(1)
@@ -231,7 +231,7 @@ struct AlbumCell: View {
 struct ArtistGridCell: View {
     let artist: Artist
     var body: some View {
-        NavigationLink(value: artist) {
+        NavLink(value: artist) {
             VStack(alignment: .leading, spacing: 6) {
                 Color.clear
                     .aspectRatio(1, contentMode: .fit)
@@ -313,7 +313,7 @@ struct AlbumsView: View {
         }
         .navigationTitle("Albums")
         .task { if albums.isEmpty { load() } }
-        .onChange(of: sort) { load() }
+        .onChange(of: sort) { _ in load() }
     }
 }
 
@@ -329,7 +329,7 @@ struct SongsView: View {
             SearchField(text: $query, prompt: "Search songs")
             if query.isEmpty {
                 // Vertically centered empty state, matching Favorites/Playlists.
-                ContentUnavailableView("Search Songs", systemImage: "magnifyingglass",
+                EmptyStateView("Search Songs", systemImage: "magnifyingglass",
                                        description: Text("There are ~24,000 tracks. Type to search by title."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -343,7 +343,7 @@ struct SongsView: View {
                 }
             }
         }
-        .onChange(of: query) { _, q in search(q) }
+        .onChange(of: query) { q in search(q) }
         .navigationTitle("Songs")
     }
 
@@ -413,7 +413,7 @@ struct GenreArtistsView: View {
 
     var body: some View {
         List(model.visibleArtists(artists)) { artist in
-            NavigationLink(value: artist) {
+            NavLink(value: artist) {
                 HStack(spacing: 12) {
                     ArtistPhoto(artist: artist, points: 40).frame(width: 40, height: 40).clipShape(Circle())
                         .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
@@ -425,7 +425,7 @@ struct GenreArtistsView: View {
             }
         }
         .navigationTitle(genre.name)
-        .toolbar(.visible, for: .navigationBar)
+        .navBar(hidden: false)
         .task { artists = model.catalog?.artists(forGenre: genre.id) ?? [] }
     }
 }
@@ -446,7 +446,7 @@ struct TagsView: View {
         VStack(spacing: 0) {
             SearchField(text: $query, prompt: "Filter tags")
             List(filtered) { tag in
-                NavigationLink(value: tag) {
+                NavLink(value: tag) {
                     HStack {
                         Label(tag.name, systemImage: "tag")
                         Spacer()
@@ -479,7 +479,7 @@ struct TagAlbumsView: View {
             .padding()
         }
         .navigationTitle(tag.name)
-        .toolbar(.visible, for: .navigationBar)
+        .navBar(hidden: false)
         .task {
             guard let c = model.catalog else { return }
             names = c.artistNames()
@@ -496,7 +496,7 @@ struct CatalogPlaylistsView: View {
 
     var body: some View {
         List(model.visibleCatalogPlaylists(playlists)) { pl in
-            NavigationLink(value: pl) {
+            NavLink(value: pl) {
                 HStack {
                     Label(pl.name, systemImage: "music.note.list")
                     Spacer()
@@ -520,7 +520,7 @@ struct CatalogPlaylistDetailView: View {
         let shown = model.visibleTracks(tracks)
         List {
             if shown.isEmpty {
-                ContentUnavailableView("Empty", systemImage: "music.note.list")
+                EmptyStateView("Empty", systemImage: "music.note.list")
             } else {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { idx, t in
                     SongRow(track: t, showArtwork: true) { audio.play(tracks: shown, startAt: idx) }
@@ -528,7 +528,7 @@ struct CatalogPlaylistDetailView: View {
             }
         }
         .navigationTitle(playlist.name)
-        .toolbar(.visible, for: .navigationBar)
+        .navBar(hidden: false)
         .toolbar {
             if !shown.isEmpty {
                 Button { audio.play(tracks: shown, startAt: 0) } label: { Image(systemName: "play.fill") }

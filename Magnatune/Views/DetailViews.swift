@@ -45,13 +45,13 @@ struct ArtistDetailView: View {
                     ExpandableText(text: bio)
                 }
                 if !genres.isEmpty || !tags.isEmpty {
-                    FlowLayout(spacing: 8) {
+                    WrapChips(spacing: 8) {
                         ForEach(genres) { g in
-                            NavigationLink(value: g) { ChipLabel(text: g.name, prominent: true) }
+                            NavLink(value: g) { ChipLabel(text: g.name, prominent: true) }
                                 .buttonStyle(.plain)
                         }
                         ForEach(tags) { tag in
-                            NavigationLink(value: tag) { ChipLabel(text: tag.name) }
+                            NavLink(value: tag) { ChipLabel(text: tag.name) }
                                 .buttonStyle(.plain)
                         }
                     }
@@ -83,7 +83,7 @@ struct ArtistDetailView: View {
         }
         .navigationTitle(artist.name)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+        .navBar(hidden: false)
         .fullScreenCover(isPresented: $showPhoto) {
             // Sized thumbnail (artist_840, a few KB) with a smaller one shown instantly;
             // falls back to the full-resolution original if the artist has no album.
@@ -134,7 +134,7 @@ struct AlbumDetailView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(album.name).font(.largeTitle.bold())
                         if let artist {
-                            NavigationLink(value: artist) {
+                            NavLink(value: artist) {
                                 Text(artistName).font(.title3).foregroundStyle(Color.accentColor)
                             }
                             .buttonStyle(.plain)
@@ -167,13 +167,13 @@ struct AlbumDetailView: View {
                         ExpandableText(text: desc)
                     }
                     if !genres.isEmpty || !tags.isEmpty {
-                        FlowLayout(spacing: 8) {
+                        WrapChips(spacing: 8) {
                             ForEach(genres) { g in
-                                NavigationLink(value: g) { ChipLabel(text: g.name, prominent: true) }
+                                NavLink(value: g) { ChipLabel(text: g.name, prominent: true) }
                                     .buttonStyle(.plain)
                             }
                             ForEach(tags) { tag in
-                                NavigationLink(value: tag) { ChipLabel(text: tag.name) }
+                                NavLink(value: tag) { ChipLabel(text: tag.name) }
                                     .buttonStyle(.plain)
                             }
                         }
@@ -205,7 +205,7 @@ struct AlbumDetailView: View {
         }
         .navigationTitle(album.name)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+        .navBar(hidden: false)
         .fullScreenCover(isPresented: $showCover) {
             FullScreenImage(
                 url: URLBuilder.coverURL(artistName: artistName, albumName: album.name, size: 1400),

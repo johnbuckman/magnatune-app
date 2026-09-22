@@ -263,7 +263,7 @@ struct MiniPlayer: View {
                 Image(systemName: "speaker.wave.2.fill").font(.caption2).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
-            .presentationCompactAdaptation(.popover)
+            .keepPopoverCompat()
         }
     }
 
@@ -390,7 +390,7 @@ struct NowPlayingView: View {
                     Spacer(minLength: 0)
                 } else {
                     Spacer()
-                    ContentUnavailableView("Nothing Playing", systemImage: "music.note")
+                    EmptyStateView("Nothing Playing", systemImage: "music.note")
                     Spacer()
                 }
             }

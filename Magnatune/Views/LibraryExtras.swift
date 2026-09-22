@@ -28,7 +28,7 @@ struct SearchView: View {
                     if !vArtists.isEmpty {
                         Section("Artists") {
                             ForEach(vArtists) { a in
-                                NavigationLink(value: a) {
+                                NavLink(value: a) {
                                     HStack(spacing: 12) {
                                         ArtistPhoto(artist: a, points: 40)
                                             .frame(width: 40, height: 40).clipShape(Circle())
@@ -45,7 +45,7 @@ struct SearchView: View {
                                 // Album name + cover link to the album; the artist is a chip
                                 // linking to the artist (web parity).
                                 HStack(spacing: 12) {
-                                    NavigationLink(value: al) {
+                                    NavLink(value: al) {
                                         HStack(spacing: 12) {
                                             CoverImage(artistName: names[al.artistId] ?? "", albumName: al.name, points: 40)
                                                 .frame(width: 40, height: 40)
@@ -54,7 +54,7 @@ struct SearchView: View {
                                     }
                                     .buttonStyle(.plain)
                                     if let artist = model.catalog?.artist(id: al.artistId) {
-                                        NavigationLink(value: artist) {
+                                        NavLink(value: artist) {
                                             Label(artist.name, systemImage: "person")
                                                 .font(.caption).lineLimit(1)
                                                 .padding(.horizontal, 8).padding(.vertical, 3)
@@ -84,11 +84,11 @@ struct SearchView: View {
                 }
             } else {
                 Spacer()
-                if query.count >= 2 { ContentUnavailableView.search(text: query) }
+                if query.count >= 2 { EmptyStateView.search(text: query) }
                 Spacer()
             }
         }
-        .onChange(of: query) { _, q in search(q) }
+        .onChange(of: query) { q in search(q) }
         .navigationTitle("Search")
         .task {
             // Auto-focus the search field when the Search section opens so you can type
@@ -138,7 +138,7 @@ struct FavoritesView: View {
         Group {
             if vArtists.isEmpty && vAlbums.isEmpty && vSongs.isEmpty {
                 // Vertically centered empty state, matching the Playlists page.
-                ContentUnavailableView("No Favorites Yet", systemImage: "heart",
+                EmptyStateView("No Favorites Yet", systemImage: "heart",
                                        description: Text(model.isOnline
                                            ? "Tap the heart on any song, album, or artist."
                                            : "You're offline. Favorites you've downloaded will appear here."))
@@ -148,7 +148,7 @@ struct FavoritesView: View {
                         if !vArtists.isEmpty {
                             header("Artists") { playFavoriteArtists() }
                             ForEach(vArtists) { a in
-                                NavigationLink(value: a) {
+                                NavLink(value: a) {
                                     HStack {
                                         ArtistPhoto(artist: a, points: 36).frame(width: 36, height: 36).clipShape(Circle())
                                     .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
@@ -240,7 +240,7 @@ struct PlaylistsView: View {
     var body: some View {
         Group {
             if rows.isEmpty {
-                ContentUnavailableView("No Playlists Yet", systemImage: "music.note.list",
+                EmptyStateView("No Playlists Yet", systemImage: "music.note.list",
                                        description: Text("Tap + to create a playlist, then add songs from the … menu on any track."))
             } else {
                 List {
@@ -249,7 +249,7 @@ struct PlaylistsView: View {
                         // otherwise a destination-based link pushes outside `path`, and the
                         // sidebar's `path = NavigationPath()` can't pop it (Popular et al.
                         // appear to "do nothing" while a playlist is open).
-                        NavigationLink(value: UserPlaylistRef(id: pl.id, name: pl.name)) {
+                        NavLink(value: UserPlaylistRef(id: pl.id, name: pl.name)) {
                             HStack { Label(pl.name, systemImage: "music.note.list"); Spacer(); Text("\(pl.count)").foregroundStyle(.secondary) }
                         }
                     }
@@ -290,7 +290,7 @@ struct PlaylistDetailView: View {
         let shown = model.visibleTracks(tracks)
         List {
             if shown.isEmpty {
-                ContentUnavailableView("Empty", systemImage: "music.note.list",
+                EmptyStateView("Empty", systemImage: "music.note.list",
                                        description: Text(model.isOnline
                                            ? "Add songs from the … menu on any track."
                                            : "You're offline — none of this playlist's songs are downloaded."))
@@ -305,7 +305,7 @@ struct PlaylistDetailView: View {
             }
         }
         .navigationTitle(name)
-        .toolbar(.visible, for: .navigationBar)
+        .navBar(hidden: false)
         .toolbar {
             if !shown.isEmpty {
                 Button { model.audio.play(tracks: shown, startAt: 0) } label: { Image(systemName: "play.fill") }
