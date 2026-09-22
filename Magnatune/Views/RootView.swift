@@ -198,19 +198,8 @@ struct RootView: View {
         }
         .padding(.top, 4)
         .background(
-            ZStack(alignment: .bottom) {
-                Color(.systemGray6)
-                // iPhone: drop the wordmark into the home-indicator safe-area space below
-                // the tab buttons. It's in the background, so the toolbar isn't moved/resized.
-                if UIDevice.current.userInterfaceIdiom == .phone {
-                    BrandImage(name: "magnatune_logo")
-                        .aspectRatio(contentMode: .fit)
-                        .frame(height: 32)
-                        .padding(.bottom, 4)
-                        .allowsHitTesting(false)
-                }
-            }
-            .ignoresSafeArea(edges: .bottom)   // extend behind home indicator
+            Color(.systemGray6)
+                .ignoresSafeArea(edges: .bottom)   // extend behind home indicator
         )
         .overlay(alignment: .top) { Divider() }
     }
