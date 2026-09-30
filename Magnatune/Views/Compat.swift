@@ -221,6 +221,34 @@ final class NavRouter: ObservableObject {
 /// UserDefaults key for the persisted drill-down path.
 let kNavPath = "nav.path"
 
+/// Website-style Back button. The app hides the system navigation bar (custom
+/// chrome), so drill-down pages had no visible way back — only the left-edge
+/// swipe (and nothing at all on Mac Catalyst, which has no titlebar toolbar).
+/// This floats a translucent "Back" pill at the top-leading of the detail area,
+/// mirroring the browser Back the web player relies on. Shown only when there is
+/// somewhere to go back to. (todo 10355130443)
+struct NavBackButton: View {
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
+                Text("Back").font(.system(size: 15, weight: .medium))
+            }
+            .padding(.vertical, 6)
+            .padding(.leading, 10)
+            .padding(.trailing, 14)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.tint)
+        .accessibilityLabel("Back")
+        .padding(.leading, 12)
+        .padding(.top, 6)
+    }
+}
+
 @available(iOS 16.0, *)
 extension NavRouter {
     var path: NavigationPath {
@@ -274,6 +302,11 @@ struct ModernNavHost<Root: View>: View {
                 .navigationDestination(for: CatalogPlaylist.self) { CatalogPlaylistDetailView(playlist: $0).onAppear { highlight(nil) } }
                 .navigationDestination(for: UserPlaylistRef.self) { PlaylistDetailView(playlistID: $0.id, name: $0.name).onAppear { highlight(.myPlaylists) } }
                 .navigationDestination(for: RecentlyPlayedRef.self) { _ in RecentlyPlayedView().onAppear { highlight(.myPlaylists) } }
+        }
+        .overlay(alignment: .topLeading) {
+            if !router.path.isEmpty {
+                NavBackButton { if !router.path.isEmpty { router.path.removeLast() } }
+            }
         }
         .scrollContentBackground(.hidden)
         .onChange(of: router.path) { newPath in
