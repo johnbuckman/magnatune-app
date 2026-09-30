@@ -342,6 +342,7 @@ struct NowPlayingView: View {
     /// the artist page. Both pass the current track's album (artist is resolved from it).
     var onOpenAlbum: (Album) -> Void = { _ in }
     var onOpenArtist: (Album) -> Void = { _ in }
+    @State private var showQueue = false
 
     private var remote: Peer? { model.remoteFocus }
     private var displayTrack: PlayableTrack? {
@@ -415,9 +416,24 @@ struct NowPlayingView: View {
                 .buttonStyle(.plain)
                 .help("Hide player")
             }
+            .overlay(alignment: .topLeading) {
+                // "Current playlist" — the queue we're playing; tap a row to jump to it.
+                // Local playback only (a controlled peer has its own queue).
+                if remote == nil, !audio.queue.isEmpty {
+                    Button { showQueue = true } label: {
+                        Image(systemName: "list.bullet")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .padding(12)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Current playlist")
+                }
+            }
         }
         .frame(minWidth: 380, idealWidth: isPhone ? 380 : 460,
                minHeight: 560, idealHeight: isPhone ? 600 : 680)
+        .sheet(isPresented: $showQueue) { QueueView() }
     }
 
     @ViewBuilder private func remoteBanner(_ peer: Peer) -> some View {
@@ -491,5 +507,51 @@ struct NowPlayingView: View {
         guard t.isFinite, t >= 0 else { return "0:00" }
         let s = Int(t)
         return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+/// The "Current playlist" queue panel for Now Playing: the tracks the player is working
+/// through, with the current one highlighted; tap a row to jump straight to it.
+struct QueueView: View {
+    @EnvironmentObject var audio: AudioPlayer
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Current Playlist").font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal).padding(.vertical, 12)
+            Divider()
+            List {
+                ForEach(Array(audio.queue.enumerated()), id: \.element.id) { idx, t in
+                    Button {
+                        audio.jump(to: idx)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 12) {
+                            if idx == audio.index {
+                                Image(systemName: audio.isPlaying ? "speaker.wave.2.fill" : "speaker.fill")
+                                    .foregroundStyle(Color.accentColor)
+                                    .frame(width: 20)
+                            } else {
+                                Text("\(idx + 1)").font(.footnote.monospacedDigit())
+                                    .foregroundStyle(.secondary).frame(width: 20)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(t.song.name).lineLimit(1)
+                                    .foregroundStyle(idx == audio.index ? Color.accentColor : .primary)
+                                Text(t.artistName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            Text(t.song.durationText).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 }

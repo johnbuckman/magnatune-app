@@ -160,6 +160,14 @@ final class AudioPlayer: ObservableObject {
         loadCurrent(autoPlay: true)
     }
 
+    /// Jump straight to a track in the current queue (from the Now Playing "Up Next" panel).
+    func jump(to newIndex: Int) {
+        guard queue.indices.contains(newIndex) else { return }
+        cancelCrossfade()
+        index = newIndex
+        loadCurrent(autoPlay: true)
+    }
+
     func previous() {
         cancelCrossfade()
         if currentTime > 3 { seek(to: 0); return }

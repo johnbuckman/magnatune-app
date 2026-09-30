@@ -233,6 +233,7 @@ struct FavoritesView: View {
 
 struct PlaylistsView: View {
     @EnvironmentObject var user: UserStore
+    @EnvironmentObject var credentials: Credentials
     @State private var rows: [UserStore.PlaylistRow] = []
     @State private var recentCount = 0
     @State private var showNew = false
@@ -245,6 +246,12 @@ struct PlaylistsView: View {
             // swipe-to-delete below never touches it.
             NavLink(value: RecentlyPlayedRef()) {
                 HStack { Label("Recently Played", systemImage: "clock.arrow.circlepath"); Spacer(); Text("\(recentCount)").foregroundStyle(.secondary) }
+            }
+            // "Recommended" — members only; server-side recs from your Recently Played.
+            if credentials.isMember {
+                NavLink(value: RecommendedRef()) {
+                    Label("Recommended", systemImage: "wand.and.stars")
+                }
             }
             if rows.isEmpty {
                 Text("Tap + to create a playlist, then add songs from the … menu on any track.")
@@ -378,5 +385,62 @@ struct RecentlyPlayedView: View {
     private func load() {
         guard let c = model.catalog else { return }
         tracks = c.makePlayable(songs: user.recentlyPlayedSongIDs(limit: Self.limit).compactMap { c.song(id: $0) })
+    }
+}
+
+// MARK: - Recommended (per-member, todo 10355065694)
+
+/// Hashable/Codable marker for the per-member "Recommended" pseudo-playlist.
+struct RecommendedRef: Hashable, Codable {}
+
+/// Server-side recommendations built from the member's Recently Played (same album-similarity
+/// as "You might also like"). Members only; refreshed daily on the server. Excludes albums the
+/// member has already favorited or disliked (filtered in `AppModel.recommendedAlbums`).
+struct RecommendedView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.isPhoneLayout) private var isPhone
+    @State private var albums: [Album] = []
+    @State private var names: [Int64: String] = [:]
+    @State private var loading = true
+    @State private var failed = false
+    private var cols: [GridItem] { [GridItem(.adaptive(minimum: coverDim(150, phone: isPhone)), spacing: 16)] }
+
+    var body: some View {
+        ScrollView {
+            if loading {
+                ProgressView("Finding music you’ll like…").padding(.top, 40)
+            } else if albums.isEmpty {
+                EmptyStateView(failed ? "Couldn’t Load" : "Nothing Yet", systemImage: "wand.and.stars",
+                               description: Text(failed
+                                   ? "Recommendations aren’t available right now — check your connection and try again."
+                                   : "Play a few albums first — recommendations are based on your Recently Played."))
+                    .padding(.top, 40)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Based on your Recently Played · updates daily")
+                        .font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
+                    LazyVGrid(columns: cols, spacing: 16) {
+                        ForEach(albums) { album in
+                            AlbumCell(album: album, artistName: names[album.artistId] ?? "")
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.top, 8)
+            }
+        }
+        .navigationTitle("Recommended")
+        .navigationBarTitleDisplayMode(.inline)
+        .navBar(hidden: false)
+        .task { await load() }
+    }
+
+    private func load() async {
+        loading = true; failed = false
+        names = model.catalog?.artistNames() ?? [:]
+        let result = await model.recommendedAlbums()
+        albums = result ?? []
+        failed = (result == nil)
+        loading = false
     }
 }

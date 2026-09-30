@@ -196,6 +196,16 @@ struct ArtistsView: View {
                             .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
                         Text(artist.name)
                         Spacer()
+                        // Quick-play: start all of this artist's songs without opening the page
+                        // (mirrors the web player's per-artist Play button, commit c30b5f1).
+                        Button {
+                            guard let c = model.catalog else { return }
+                            let tracks = model.visibleTracks(c.makePlayable(songs: c.songs(forArtist: artist.id)))
+                            if !tracks.isEmpty { model.audio.play(tracks: tracks, startAt: 0) }
+                        } label: {
+                            Image(systemName: "play.circle").font(.title3).foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
                         FavoriteButton(kind: "artist", id: artist.id)
                         AddToPlaylistButton { model.catalog?.songs(forArtist: artist.id).map { $0.id } ?? [] }
                     }

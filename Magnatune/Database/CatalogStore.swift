@@ -123,6 +123,55 @@ final class CatalogStore {
         } ?? []
     }
 
+    // MARK: Per-member "Recommended" (todo 10355065694) — seeds + exclusions + lookup
+
+    /// A helper to run an `IN (...)` query over a set of Int64 ids and collect one text column.
+    private func textColumn(_ column: String, from table: String, idColumn: String, ids: [Int64]) -> [String] {
+        guard !ids.isEmpty else { return [] }
+        let ph = ids.map { _ in "?" }.joined(separator: ",")
+        return read { db in
+            try String.fetchAll(db, sql: "SELECT \(column) FROM \(table) WHERE \(idColumn) IN (\(ph))",
+                                arguments: StatementArguments(ids))
+        } ?? []
+    }
+
+    /// Recently-played SONG ids → their album SKUs, most-recent-first and de-duplicated: the
+    /// seed the server recommends from. Preserves the input order (albums the member played
+    /// most recently come first).
+    func recommendSeeds(fromSongIDs songIDs: [Int64]) -> [String] {
+        guard !songIDs.isEmpty else { return [] }
+        let ph = songIDs.map { _ in "?" }.joined(separator: ",")
+        let pairs = read { db -> [(Int64, String)] in
+            try Row.fetchAll(db, sql: """
+                SELECT s.song_id, al.sku FROM songs s JOIN albums al ON al.album_id = s.album_id
+                WHERE s.song_id IN (\(ph))
+                """, arguments: StatementArguments(songIDs)).map { ($0["song_id"], $0["sku"]) }
+        } ?? []
+        let bySong = Dictionary(pairs, uniquingKeysWith: { a, _ in a })
+        var seen = Set<String>(), out: [String] = []
+        for id in songIDs { if let sku = bySong[id], seen.insert(sku).inserted { out.append(sku) } }
+        return out
+    }
+
+    /// Album SKUs for a set of album ids (excluded albums = favorited OR disliked).
+    func albumSKUs(forAlbumIDs ids: [Int64]) -> [String] { textColumn("sku", from: "albums", idColumn: "album_id", ids: ids) }
+    /// Artist page-slugs for a set of artist ids (excluded artists = disliked artists).
+    func artistPages(forArtistIDs ids: [Int64]) -> [String] { textColumn("page", from: "artists", idColumn: "artists_id", ids: ids) }
+    /// Genre names for a set of genre ids (excluded genres = disliked genres).
+    func genreNames(forGenreIDs ids: [Int64]) -> [String] { textColumn("name", from: "genres", idColumn: "genre_id", ids: ids) }
+
+    /// Albums for the given SKUs, returned in the SAME order as `skus` (the server ranks them).
+    func albums(forSKUs skus: [String]) -> [Album] {
+        guard !skus.isEmpty else { return [] }
+        let ph = skus.map { _ in "?" }.joined(separator: ",")
+        let rows = read { db in
+            try Album.fetchAll(db, sql: "SELECT * FROM albums WHERE sku IN (\(ph))",
+                               arguments: StatementArguments(skus))
+        } ?? []
+        let bySku = Dictionary(rows.map { ($0.sku, $0) }, uniquingKeysWith: { a, _ in a })
+        return skus.compactMap { bySku[$0] }
+    }
+
     func newReleases(limit: Int = 40) -> [Album] {
         read {
             try Album.order(sql: "release_date DESC").limit(limit).fetchAll($0)

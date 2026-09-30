@@ -27,6 +27,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 struct MagnatuneApp: App {
     @StateObject private var model = AppModel()
     @AppStorage(AppAppearance.key) private var appearanceRaw = AppAppearance.system.rawValue
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -38,8 +39,12 @@ struct MagnatuneApp: App {
                 .environmentObject(model.audio)
                 .task {
                     await model.credentials.refreshMembership()   // verify membership once, at launch
+                    await model.cloudSync.pull()                  // pull+merge this member's cloud settings
                     await model.refreshCatalog()
                     await model.checkCatalogUpdate()   // auto-download a newer catalog in the background
+                }
+                .onChange(of: scenePhase) { phase in
+                    if phase == .background { model.cloudSync.flush() }   // flush pending setting changes
                 }
         }
         .commands {

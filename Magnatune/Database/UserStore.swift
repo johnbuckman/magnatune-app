@@ -271,6 +271,55 @@ final class UserStore: ObservableObject {
         reloadPlaylistedSongs()
     }
 
+    // MARK: Cloud-sync import (merge a member's blob from the server, todo 10355013029)
+
+    /// Add favorites/dislikes pulled from another device — union semantics (never deletes),
+    /// so a favorite made anywhere shows up everywhere. `kind` is "song"|"album"|"artist"
+    /// (favorites) or additionally "genre" (dislikes). Reloads the published sets once.
+    func importFavorites(kind: String, ids: [Int64]) {
+        importReactions(table: "favorites", kind: kind, ids: ids, removeFrom: "dislikes")
+        reloadFavorites()
+        reloadDislikes()
+    }
+
+    func importDislikes(kind: String, ids: [Int64]) {
+        importReactions(table: "dislikes", kind: kind, ids: ids, removeFrom: "favorites")
+        reloadDislikes()
+        reloadFavorites()
+    }
+
+    private func importReactions(table: String, kind: String, ids: [Int64], removeFrom: String) {
+        guard !ids.isEmpty else { return }
+        let now = Date().timeIntervalSince1970
+        try? dbQueue.write { db in
+            for id in ids {
+                // INSERT OR IGNORE: keep the original created_at if it's already ours.
+                try db.execute(sql: "INSERT OR IGNORE INTO \(table) (kind, ref_id, created_at) VALUES (?,?,?)",
+                               arguments: [kind, id, now])
+                // Opposite reactions can't coexist (mirrors toggleFavorite/toggleDislike).
+                try db.execute(sql: "DELETE FROM \(removeFrom) WHERE kind = ? AND ref_id = ?", arguments: [kind, id])
+            }
+        }
+    }
+
+    /// Merge recently-played song ids from another device into the local history. Only ids we
+    /// don't already have are inserted, placed just BEFORE the oldest local play so this
+    /// device's own recency stays on top; the incoming order is preserved among themselves.
+    /// Feeds the Recommended seeds and the Recently Played list across devices.
+    func importRecentlyPlayed(songIDs: [Int64]) {
+        guard !songIDs.isEmpty else { return }
+        try? dbQueue.write { db in
+            let existing = try Set(Int64.fetchAll(db, sql: "SELECT DISTINCT song_id FROM play_history"))
+            let oldest = try Double.fetchOne(db, sql: "SELECT MIN(played_at) FROM play_history") ?? Date().timeIntervalSince1970
+            // Newest-first input: give earlier entries a larger timestamp so order survives.
+            var t = oldest - 1
+            for id in songIDs where !existing.contains(id) {
+                try db.execute(sql: "INSERT INTO play_history (song_id, played_at) VALUES (?,?)", arguments: [id, t])
+                t -= 1
+            }
+        }
+    }
+
     /// Remove the given songs from every playlist (the "remove from playlist" half of the
     /// add/remove toggle button).
     func removeSongsFromAllPlaylists(_ ids: [Int64]) {

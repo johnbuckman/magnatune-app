@@ -13,11 +13,52 @@ struct Artist: Identifiable, Codable, Hashable, FetchableRecord, TableRecord {
     var photo: String?
     var society: String?
     var page: String?          // artist URL slug (e.g. "beth_quist"); optional → safe pre/post catalog regen
+    // Where the artist is based. Optional → safe pre/post catalog regen: the columns were
+    // dropped by an older catalog export, so a dump without them decodes these as nil and the
+    // "based in" line simply doesn't show (mirrors the web player, commit f7bfb2d).
+    var city: String?
+    var state: String?
+    var country: String?
 
     enum CodingKeys: String, CodingKey {
         case id = "artists_id"
         case name, description, homepage, bio, photo, society, page
+        case city, state, country
     }
+
+    /// "Berkeley, California, USA" — the artist's location for the "based in" line. US state
+    /// postal codes are expanded to full names; empty parts are dropped; nil when the catalog
+    /// carries no location (older dumps). Matches the web player's `stateLong` behavior.
+    var locationText: String? {
+        let parts = [city, Artist.expandUSState(state), country]
+            .map { ($0 ?? "").trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    /// US state / territory postal codes → full names (matches the web player's US_STATES map,
+    /// commit 85fbf2f). Non-US / unknown values pass through unchanged.
+    static func expandUSState(_ s: String?) -> String? {
+        let t = (s ?? "").trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return s }
+        return usStates[t.uppercased()] ?? t
+    }
+
+    private static let usStates: [String: String] = [
+        "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+        "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia",
+        "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois",
+        "IN": "Indiana", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana",
+        "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota",
+        "MS": "Mississippi", "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+        "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+        "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon",
+        "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota",
+        "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia",
+        "WA": "Washington", "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+        "PR": "Puerto Rico", "GU": "Guam", "VI": "U.S. Virgin Islands", "AS": "American Samoa",
+        "MP": "Northern Mariana Islands",
+    ]
 }
 
 struct Album: Identifiable, Codable, Hashable, FetchableRecord, TableRecord {

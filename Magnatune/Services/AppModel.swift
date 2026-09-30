@@ -10,6 +10,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var catalog: CatalogStore?
     let userStore: UserStore
     let credentials: Credentials
+    let cloudSync: CloudSync
     let audio: AudioPlayer
     let peerService: PeerService
     private let sync = CatalogSync()
@@ -110,6 +111,7 @@ final class AppModel: ObservableObject {
         let userPath = AppModel.userDBPath()
         userStore = (try? UserStore(path: userPath)) ?? AppModel.makeFallbackUserStore()
         audio = AudioPlayer(credentials: credentials, userStore: userStore)
+        cloudSync = CloudSync(userStore: userStore, credentials: credentials)
         peerService = PeerService(deviceName: AppModel.currentDeviceName())
 
         sync.ensureSeeded()
@@ -125,14 +127,25 @@ final class AppModel: ObservableObject {
                 self?.deduplicateFavorites()
                 self?.recomputeDislikeSuppression()
                 self?.syncAutoDownloads()
+                self?.cloudSync.markDirty()   // mirror favorites/dislikes/playlists to the cloud
             }
+
+        // A pulled cloud blob adopts remote scalar prefs into UserDefaults; reflect the live
+        // "hide dislikes" value so the UI updates without a relaunch (theme is @AppStorage).
+        cloudSync.onAdoptScalars = { [weak self] _, hide in
+            guard let self, self.hideDislikes != hide else { return }
+            self.hideDislikes = hide
+        }
 
         // Signing in/out changes whether favorites should be downloaded.
         membershipObserver = credentials.$isMember
             .removeDuplicates()
             .dropFirst()
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.syncAutoDownloads() }
+            .sink { [weak self] member in
+                self?.syncAutoDownloads()
+                if member { Task { await self?.cloudSync.pull() } }   // sign-in: pull cloud settings
+            }
 
         deduplicateFavorites()
         if autoDownloadFavorites { syncAutoDownloads() }
@@ -162,6 +175,27 @@ final class AppModel: ObservableObject {
             }
         }
         if !toRemove.isEmpty { userStore.removeFavorites(toRemove) }
+    }
+
+    // MARK: Recommended (per-member, todo 10355065694)
+
+    /// The member's server-side recommendations (from Recently Played), reusing the same
+    /// album-similarity as "You might also like". Filtered for immediacy — anything the member
+    /// has since favorited, disliked, or that's suppressed is dropped, even though the server
+    /// caches the recs for 24h. Returns nil on failure (offline / not a member / server error).
+    func recommendedAlbums() async -> [Album]? {
+        guard let c = catalog, credentials.isMember else { return nil }
+        let seeds = c.recommendSeeds(fromSongIDs: userStore.recentlyPlayedSongIDs(limit: 100))
+        let exAlbumIDs = Array(Set(userStore.dislikeIDs(kind: "album") + userStore.favoriteIDs(kind: "album")))
+        guard let skus = await Recommendations.fetch(
+            seeds: seeds,
+            excludeAlbums: c.albumSKUs(forAlbumIDs: exAlbumIDs),
+            excludeArtists: c.artistPages(forArtistIDs: userStore.dislikeIDs(kind: "artist")),
+            excludeGenres: c.genreNames(forGenreIDs: userStore.dislikeIDs(kind: "genre")),
+            credentials: credentials) else { return nil }
+        let fav = Set(userStore.favoriteIDs(kind: "album"))
+        let dis = Set(userStore.dislikeIDs(kind: "album"))
+        return visibleAlbums(c.albums(forSKUs: skus)).filter { !fav.contains($0.id) && !dis.contains($0.id) }
     }
 
     // MARK: Local-network peer sync

@@ -24,6 +24,12 @@ struct ArtistDetailView: View {
                         .onTapGesture { showPhoto = true }
                     VStack(alignment: .leading, spacing: 8) {
                         Text(artist.name).font(.largeTitle.bold())
+                        // "Based in" line (city/state/country) — restored from the catalog,
+                        // matching the web player. Shows nothing when the dump carries no location.
+                        if let loc = artist.locationText {
+                            Label(loc, systemImage: "location.fill")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
                         HStack(spacing: 14) {
                             let shown = model.visibleTracks(tracks)
                             let nowPlaying = audio.isPlaying && audio.current?.album.artistId == artist.id
