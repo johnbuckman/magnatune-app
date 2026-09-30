@@ -139,6 +139,7 @@ func magnatuneDestination(for value: AnyHashable) -> some View {
     case let t as Tag:             TagAlbumsView(tag: t)
     case let cp as CatalogPlaylist: CatalogPlaylistDetailView(playlist: cp)
     case let up as UserPlaylistRef: PlaylistDetailView(playlistID: up.id, name: up.name)
+    case is RecentlyPlayedRef:     RecentlyPlayedView()
     default:                       EmptyView()
     }
 }
@@ -272,6 +273,7 @@ struct ModernNavHost<Root: View>: View {
                 .navigationDestination(for: Tag.self) { TagAlbumsView(tag: $0).onAppear { highlight(.tags) } }
                 .navigationDestination(for: CatalogPlaylist.self) { CatalogPlaylistDetailView(playlist: $0).onAppear { highlight(nil) } }
                 .navigationDestination(for: UserPlaylistRef.self) { PlaylistDetailView(playlistID: $0.id, name: $0.name).onAppear { highlight(.myPlaylists) } }
+                .navigationDestination(for: RecentlyPlayedRef.self) { _ in RecentlyPlayedView().onAppear { highlight(.myPlaylists) } }
         }
         .scrollContentBackground(.hidden)
         .onChange(of: router.path) { newPath in

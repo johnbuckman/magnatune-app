@@ -196,6 +196,13 @@ final class UserStore: ObservableObject {
         }) ?? []
     }
 
+    /// Wipe the "Recently Played" history (the Clear action on that pseudo-playlist).
+    func clearPlayHistory() {
+        try? dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM play_history")
+        }
+    }
+
     // MARK: Playlists
 
     struct PlaylistRow: Identifiable, FetchableRecord {

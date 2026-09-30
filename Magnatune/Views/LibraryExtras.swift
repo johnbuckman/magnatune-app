@@ -234,29 +234,34 @@ struct FavoritesView: View {
 struct PlaylistsView: View {
     @EnvironmentObject var user: UserStore
     @State private var rows: [UserStore.PlaylistRow] = []
+    @State private var recentCount = 0
     @State private var showNew = false
     @State private var newName = ""
 
     var body: some View {
-        Group {
+        List {
+            // Auto-managed "Recently Played" — pinned at the top, not user-created, can't be
+            // renamed or deleted (it fills itself as you listen). Outside the ForEach so the
+            // swipe-to-delete below never touches it.
+            NavLink(value: RecentlyPlayedRef()) {
+                HStack { Label("Recently Played", systemImage: "clock.arrow.circlepath"); Spacer(); Text("\(recentCount)").foregroundStyle(.secondary) }
+            }
             if rows.isEmpty {
-                EmptyStateView("No Playlists Yet", systemImage: "music.note.list",
-                                       description: Text("Tap + to create a playlist, then add songs from the … menu on any track."))
+                Text("Tap + to create a playlist, then add songs from the … menu on any track.")
+                    .font(.footnote).foregroundStyle(.secondary)
             } else {
-                List {
-                    ForEach(rows) { pl in
-                        // Value-based link so the detail lives on the shared NavigationPath —
-                        // otherwise a destination-based link pushes outside `path`, and the
-                        // sidebar's `path = NavigationPath()` can't pop it (Popular et al.
-                        // appear to "do nothing" while a playlist is open).
-                        NavLink(value: UserPlaylistRef(id: pl.id, name: pl.name)) {
-                            HStack { Label(pl.name, systemImage: "music.note.list"); Spacer(); Text("\(pl.count)").foregroundStyle(.secondary) }
-                        }
+                ForEach(rows) { pl in
+                    // Value-based link so the detail lives on the shared NavigationPath —
+                    // otherwise a destination-based link pushes outside `path`, and the
+                    // sidebar's `path = NavigationPath()` can't pop it (Popular et al.
+                    // appear to "do nothing" while a playlist is open).
+                    NavLink(value: UserPlaylistRef(id: pl.id, name: pl.name)) {
+                        HStack { Label(pl.name, systemImage: "music.note.list"); Spacer(); Text("\(pl.count)").foregroundStyle(.secondary) }
                     }
-                    .onDelete { idx in
-                        idx.map { rows[$0].id }.forEach { user.deletePlaylist(id: $0) }
-                        reload()
-                    }
+                }
+                .onDelete { idx in
+                    idx.map { rows[$0].id }.forEach { user.deletePlaylist(id: $0) }
+                    reload()
                 }
             }
         }
@@ -272,7 +277,10 @@ struct PlaylistsView: View {
         .task { reload() }
     }
 
-    private func reload() { rows = user.playlists() }
+    private func reload() {
+        rows = user.playlists()
+        recentCount = user.recentlyPlayedSongIDs(limit: RecentlyPlayedView.limit).count
+    }
 }
 
 /// Hashable reference to a user playlist, pushed onto the shared NavigationPath.
@@ -317,5 +325,58 @@ struct PlaylistDetailView: View {
     private func load() {
         guard let c = model.catalog else { return }
         tracks = c.makePlayable(songs: user.songIDs(inPlaylist: playlistID).compactMap { c.song(id: $0) })
+    }
+}
+
+// MARK: - Recently Played
+
+/// Hashable/Codable marker for the auto "Recently Played" pseudo-playlist, pushed onto the
+/// shared NavigationPath (Codable so the path can be saved/restored across launches).
+struct RecentlyPlayedRef: Hashable, Codable {}
+
+/// Auto-managed "Recently Played": the songs you've listened to, most-recent-first,
+/// de-duplicated (a replay moves the song to the top — that ordering is done by the
+/// `recentlyPlayedSongIDs` query). Populated automatically on every track start via
+/// `UserStore.recordPlay`; this view only reads it and offers a Clear action.
+struct RecentlyPlayedView: View {
+    static let limit = 100
+
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var user: UserStore
+    @State private var tracks: [PlayableTrack] = []
+    @State private var confirmClear = false
+
+    var body: some View {
+        let shown = model.visibleTracks(tracks)
+        List {
+            if shown.isEmpty {
+                EmptyStateView("Nothing Yet", systemImage: "clock.arrow.circlepath",
+                                       description: Text(model.isOnline
+                                           ? "The songs you play show up here automatically."
+                                           : "You're offline — none of your recently-played songs are downloaded."))
+            } else {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { idx, t in
+                    SongRow(track: t, showArtwork: true) { model.audio.play(tracks: shown, startAt: idx) }
+                }
+            }
+        }
+        .navigationTitle("Recently Played")
+        .navBar(hidden: false)
+        .toolbar {
+            if !shown.isEmpty {
+                Button { model.audio.play(tracks: shown, startAt: 0) } label: { Image(systemName: "play.fill") }
+                Button(role: .destructive) { confirmClear = true } label: { Image(systemName: "trash") }
+            }
+        }
+        .alert("Clear Recently Played?", isPresented: $confirmClear) {
+            Button("Clear", role: .destructive) { user.clearPlayHistory(); load() }
+            Button("Cancel", role: .cancel) {}
+        }
+        .task { load() }
+    }
+
+    private func load() {
+        guard let c = model.catalog else { return }
+        tracks = c.makePlayable(songs: user.recentlyPlayedSongIDs(limit: Self.limit).compactMap { c.song(id: $0) })
     }
 }
