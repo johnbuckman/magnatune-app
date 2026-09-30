@@ -432,7 +432,19 @@ struct RecommendedView: View {
         .navigationTitle("Recommended")
         .navigationBarTitleDisplayMode(.inline)
         .navBar(hidden: false)
+        .toolbar {
+            if !albums.isEmpty {
+                Button { playAll() } label: { Image(systemName: "play.fill") }
+            }
+        }
         .task { await load() }
+    }
+
+    /// Play every recommended album's songs, in the order shown.
+    private func playAll() {
+        guard let c = model.catalog else { return }
+        let tracks = model.visibleTracks(c.makePlayable(songs: albums.flatMap { c.songs(forAlbum: $0.id) }))
+        if !tracks.isEmpty { model.audio.play(tracks: tracks, startAt: 0) }
     }
 
     private func load() async {
