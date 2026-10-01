@@ -63,7 +63,9 @@ struct RootView: View {
         // Restore the top-level page immediately (no flash of Popular). The drill-down is
         // restored later, once the catalog is ready (see restoreNavPathIfNeeded()).
         let saved = UserDefaults.standard.string(forKey: Self.kSection)
-        _selection = State(initialValue: SidebarItem(rawValue: saved ?? "") ?? .popular)
+        // Help is a pushed page now, never a persisted top-level section.
+        let restored = SidebarItem(rawValue: saved ?? "") ?? .popular
+        _selection = State(initialValue: restored == .help ? .popular : restored)
     }
 
     var body: some View {
@@ -90,6 +92,14 @@ struct RootView: View {
         .onChange(of: selection) { s in
             UserDefaults.standard.set(s.rawValue, forKey: Self.kSection)
         }
+        // The router drives section changes for goBack/goForward/restore (anything it
+        // initiates rather than a direct sidebar/tab tap) via this one-shot token.
+        .onChange(of: router.sectionToken) { _ in
+            if let raw = router.pendingSection, let item = SidebarItem(rawValue: raw) {
+                navHighlight = nil
+                selection = item
+            }
+        }
         .sheet(isPresented: $showNowPlaying) {
             NowPlayingView(
                 onOpenAlbum: { album in
@@ -109,7 +119,7 @@ struct RootView: View {
         }
         .background(MacWindowConfigurator())
         .environmentObject(router)
-        .onAppear { model.resumePeerSharingIfGranted() }
+        .onAppear { model.resumePeerSharingIfGranted(); router.seed(section: selection.rawValue) }
         .alert(model.localNetworkDenied ? "Local Network Access Needed" : "Find Magnatune Players Nearby",
                isPresented: $model.showLocalNetworkPrimer) {
             if model.localNetworkDenied {
@@ -213,7 +223,7 @@ struct RootView: View {
         return Button {
             navHighlight = nil
             selection = item
-            router.reset()
+            router.go(toSection: item.rawValue, updateSection: false)
         } label: {
             VStack(spacing: 3) {
                 Image(systemName: item.icon).font(.system(size: 19))
@@ -294,7 +304,7 @@ struct RootView: View {
             // section root, so tapping the current section while deep in it still works.
             navHighlight = nil
             selection = item
-            router.reset()
+            router.go(toSection: item.rawValue, updateSection: false)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: item.icon)
@@ -327,12 +337,11 @@ struct RootView: View {
         return .primary
     }
 
-    /// Show the Help page in the content area, like selecting any sidebar section.
-    /// Used by both the mascot tap and Settings → "App Help".
+    /// Open the Help page. It's a pushed destination now (so it gets the native ‹ Back
+    /// chevron and joins the browser-style history), reached from both the mascot tap and
+    /// Settings → "App Help".
     private func showHelp() {
-        navHighlight = nil
-        selection = .help
-        router.reset()
+        router.push(HelpRef())
     }
 
     @ViewBuilder private var content: some View {
@@ -368,11 +377,7 @@ struct RootView: View {
             case .myPlaylists: PlaylistsView()
             case .search: SearchView()
             case .settings: SettingsView(onShowHelp: { showHelp() })
-            case .help: HelpView(onNavigate: { item in
-                navHighlight = nil
-                selection = item
-                router.reset()
-            })
+            case .help: EmptyView()   // Help is a pushed destination now (see HelpRef)
             }
         }
     }

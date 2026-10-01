@@ -149,7 +149,7 @@ struct PlayableTrack: Identifiable, Hashable {
 
 /// Navigation target: open an album's detail page and scroll-to / highlight one song
 /// (used when tapping a song in search results). Distinct from navigating to the bare Album.
-struct AlbumSong: Hashable {
+struct AlbumSong: Hashable, Codable {
     var album: Album
     var songID: Int64
 }

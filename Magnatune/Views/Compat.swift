@@ -112,11 +112,11 @@ struct NavLink<Value: Hashable, Label: View>: View {
 
     var body: some View {
         if #available(iOS 16.0, *) {
-            // Push through the router's typed append (not NavigationLink(value:)): when
-            // NavigationStack appends through an external path binding it uses the
-            // Hashable-only path, which makes NavigationPath.codable nil and breaks
-            // persistence. router.push → applyPush appends the concrete Codable type, so the
-            // path stays codable and the drill-down is saved/restored.
+            // Push through the router (not NavigationLink(value:)): the router records the
+            // push in its browser-style history and rebuilds the path from a typed mirror,
+            // appending the concrete Codable type — so the path stays codable and the
+            // drill-down is saved/restored (appending the AnyHashable wrapper would make
+            // NavigationPath.codable nil).
             Button(action: { router.push(value) }, label: label)
                 .buttonStyle(.plain)
         } else {
@@ -141,6 +141,7 @@ func magnatuneDestination(for value: AnyHashable) -> some View {
     case let up as UserPlaylistRef: PlaylistDetailView(playlistID: up.id, name: up.name)
     case is RecentlyPlayedRef:     RecentlyPlayedView()
     case is RecommendedRef:        RecommendedView()
+    case is HelpRef:               HelpView()
     default:                       EmptyView()
     }
 }
@@ -188,93 +189,293 @@ extension View {
 
 // MARK: - Navigation host (decouples RootView from the iOS-16 NavigationStack)
 
-/// Shared drill-down intent, driven by RootView and consumed by whichever host is live.
-/// Holds no `NavigationPath` (that type is iOS 16-only) — just reset/push signals — so it
-/// compiles at the iOS 15 floor and works for both hosts.
+/// A single value on a drill-down path, in a Codable+Hashable sum type so the whole
+/// navigation history can be persisted and rebuilt losslessly. `NavigationPath` erases
+/// its elements (you can read its count but not the values), which is why the router
+/// keeps its own typed mirror of the drill-down as `[NavValue]` and treats that — not the
+/// opaque path — as the source of truth for back/forward.
+enum NavValue: Hashable, Codable {
+    case artist(Artist)
+    case album(Album)
+    case albumSong(AlbumSong)
+    case genre(Genre)
+    case tag(Tag)
+    case catalogPlaylist(CatalogPlaylist)
+    case userPlaylist(UserPlaylistRef)
+    case recentlyPlayed
+    case recommended
+    case help
+
+    /// Wrap one of the app's Hashable nav targets. Returns nil for anything not navigable.
+    init?(_ value: AnyHashable) {
+        switch value.base {
+        case let a as Artist:           self = .artist(a)
+        case let al as Album:           self = .album(al)
+        case let asng as AlbumSong:     self = .albumSong(asng)
+        case let g as Genre:            self = .genre(g)
+        case let t as Tag:              self = .tag(t)
+        case let cp as CatalogPlaylist: self = .catalogPlaylist(cp)
+        case let up as UserPlaylistRef: self = .userPlaylist(up)
+        case is RecentlyPlayedRef:      self = .recentlyPlayed
+        case is RecommendedRef:         self = .recommended
+        case is HelpRef:                self = .help
+        default:                        return nil
+        }
+    }
+
+    /// Append the concrete (typed) value to a `NavigationPath`. The concrete type matters:
+    /// appending the `AnyHashable` wrapper would make `NavigationPath.codable` nil and break
+    /// matching against the typed `.navigationDestination(for:)` handlers.
+    @available(iOS 16.0, *)
+    func append(to path: inout NavigationPath) {
+        switch self {
+        case .artist(let a):          path.append(a)
+        case .album(let a):           path.append(a)
+        case .albumSong(let a):       path.append(a)
+        case .genre(let g):           path.append(g)
+        case .tag(let t):             path.append(t)
+        case .catalogPlaylist(let c): path.append(c)
+        case .userPlaylist(let u):    path.append(u)
+        case .recentlyPlayed:         path.append(RecentlyPlayedRef())
+        case .recommended:            path.append(RecommendedRef())
+        case .help:                   path.append(HelpRef())
+        }
+    }
+
+    /// The value as an `AnyHashable`, for the iOS 15 legacy host's single-push link.
+    var anyHashable: AnyHashable {
+        switch self {
+        case .artist(let a):          return AnyHashable(a)
+        case .album(let a):           return AnyHashable(a)
+        case .albumSong(let a):       return AnyHashable(a)
+        case .genre(let g):           return AnyHashable(g)
+        case .tag(let t):             return AnyHashable(t)
+        case .catalogPlaylist(let c): return AnyHashable(c)
+        case .userPlaylist(let u):    return AnyHashable(u)
+        case .recentlyPlayed:         return AnyHashable(RecentlyPlayedRef())
+        case .recommended:            return AnyHashable(RecommendedRef())
+        case .help:                   return AnyHashable(HelpRef())
+        }
+    }
+}
+
+/// One entry in the navigation history: a top-level section plus its drill-down stack.
+/// Switching section and drilling in are both just new locations, so "back" spans both —
+/// exactly like a web browser, which is the model John asked for.
+struct NavLoc: Hashable, Codable {
+    var section: String
+    var values: [NavValue]
+}
+
+/// UserDefaults key for the persisted current location (section + drill-down).
+let kNavLoc = "nav.loc.v2"
+
+/// Browser-style navigation for the whole app: one linear history of `NavLoc`s plus a
+/// forward stack. `goBack()`/`goForward()` move through it; the swipe gesture and the
+/// custom ‹ Back chevron both call those. The router is the source of truth and drives
+/// both the iOS 16 `NavigationStack` path (via the typed mirror) and RootView's top-level
+/// `selection` (via a one-shot token). Holds no `NavigationPath` stored property so it
+/// still compiles at the iOS 15 floor; the path lives behind the iOS-16 extension below.
 @MainActor
 final class NavRouter: ObservableObject {
-    /// Bumped to pop the drill-down back to the section root.
+    // Legacy (iOS 15) host signals — the NavigationView fallback can't be driven by a path.
+    /// Bumped to pop the drill-down back to the section root (`.id(resetToken)`).
     @Published var resetToken = 0
     /// Bumped to request a programmatic push of `pendingPush`.
     @Published var pushToken = 0
     /// The value to push on the next `pushToken` change (one-shot).
     var pendingPush: AnyHashable?
 
-    /// One-shot guard so the saved drill-down is restored exactly once per launch,
-    /// regardless of which host instance triggers it.
+    // Hand-off to RootView for router-initiated section changes (goBack/goForward/restore):
+    // RootView observes `sectionToken` and copies `pendingSection` into its @State selection.
+    @Published var sectionToken = 0
+    var pendingSection: String?
+
+    /// The browser history. `current` is `history.last`; there is always at least one entry.
+    @Published private(set) var history: [NavLoc] = [NavLoc(section: "popular", values: [])]
+    @Published private(set) var forward: [NavLoc] = []
+
+    /// One-shot guard so the saved location is restored exactly once per launch.
     var didRestorePath = false
 
-    /// Opaque `NavigationPath` storage. That type is iOS 16-only, so it can't be named in
-    /// a stored property at the iOS 15 floor — held as `Any` and accessed only through the
-    /// iOS-16 extension below. This lives on the router (a single, stable StateObject) so
-    /// the drill-down is shared across the sidebar and tab-bar layouts and survives the
-    /// launch-time compact→regular layout switch — exactly as the original single @State did.
+    /// Opaque `NavigationPath` storage (iOS 16-only type), accessed only via the extension
+    /// below. On a single stable StateObject so the drill-down survives the launch-time
+    /// compact↔regular layout switch.
     fileprivate var pathStorage: Any?
+    /// True while the router itself is writing the path, so the path setter can tell an
+    /// app-initiated change from a user pop (native back button / edge swipe).
+    fileprivate var isSyncing = false
 
-    func reset() { resetToken &+= 1 }
+    var current: NavLoc { history.last ?? NavLoc(section: "popular", values: []) }
+    var canGoBack: Bool { history.count > 1 }
+    var canGoForward: Bool { !forward.isEmpty }
+
+    /// Seed the baseline location before any navigation (so the first "back" target is the
+    /// page the app actually opened on). No-op once the user has navigated or a restore ran.
+    func seed(section raw: String) {
+        guard !didRestorePath, history.count == 1, forward.isEmpty, current.values.isEmpty else { return }
+        history = [NavLoc(section: raw, values: [])]
+    }
+
+    /// Navigate to a top-level section root. `updateSection` is false when RootView already
+    /// set its own selection (a sidebar/tab tap) and true when the router drives the change
+    /// (e.g. a link inside Help). Re-tapping the current section root is a no-op.
+    func go(toSection raw: String, updateSection: Bool) {
+        if current.section == raw && current.values.isEmpty {
+            if updateSection { pendingSection = raw; sectionToken &+= 1 }
+            applyPath()
+            return
+        }
+        history.append(NavLoc(section: raw, values: []))
+        forward.removeAll()
+        apply(updateSection: updateSection)
+    }
 
     func push<V: Hashable>(_ value: V) {
-        pendingPush = AnyHashable(value)
-        pushToken &+= 1
+        guard let nv = NavValue(AnyHashable(value)) else { return }
+        var loc = current
+        loc.values.append(nv)
+        history.append(loc)
+        forward.removeAll()
+        pendingPush = AnyHashable(value)   // legacy host's hidden link
+        apply(updateSection: false)
     }
-}
 
-/// UserDefaults key for the persisted drill-down path.
-let kNavPath = "nav.path"
+    /// Back-compat shim: collapse the drill-down to the current section root.
+    func reset() { go(toSection: current.section, updateSection: false) }
 
-/// Website-style Back button. The app hides the system navigation bar (custom
-/// chrome), so drill-down pages had no visible way back — only the left-edge
-/// swipe (and nothing at all on Mac Catalyst, which has no titlebar toolbar).
-/// This floats a translucent "Back" pill at the top-leading of the detail area,
-/// mirroring the browser Back the web player relies on. Shown only when there is
-/// somewhere to go back to. (todo 10355130443)
-struct NavBackButton: View {
-    var action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
-                Text("Back").font(.system(size: 15, weight: .medium))
-            }
-            .padding(.vertical, 6)
-            .padding(.leading, 10)
-            .padding(.trailing, 14)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+    func goBack() {
+        guard history.count > 1 else { return }
+        forward.append(history.removeLast())
+        apply(updateSection: true)
+    }
+
+    func goForward() {
+        guard let next = forward.popLast() else { return }
+        history.append(next)
+        apply(updateSection: true)
+    }
+
+    /// Restore the last session's location once the catalog is ready.
+    func restoreIfNeeded(catalogReady: Bool) {
+        guard !didRestorePath, catalogReady else { return }
+        didRestorePath = true
+        guard let data = UserDefaults.standard.data(forKey: kNavLoc),
+              let loc = try? JSONDecoder().decode(NavLoc.self, from: data) else { return }
+        history = [loc]
+        forward = []
+        apply(updateSection: true)
+    }
+
+    // MARK: Internal
+
+    /// Push the current location out to the section selection (optional) and the path.
+    private func apply(updateSection: Bool) {
+        if updateSection { pendingSection = current.section; sectionToken &+= 1 }
+        applyPath()
+        persistCurrent()
+    }
+
+    /// Rebuild the live path from the typed mirror (iOS 16), or fire the legacy signals.
+    private func applyPath() {
+        if #available(iOS 16.0, *) {
+            syncPath()
+        } else {
+            if current.values.isEmpty { resetToken &+= 1 } else { pushToken &+= 1 }
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.tint)
-        .accessibilityLabel("Back")
-        .padding(.leading, 12)
-        .padding(.top, 6)
+    }
+
+    fileprivate func persistCurrent() {
+        if let data = try? JSONEncoder().encode(current) {
+            UserDefaults.standard.set(data, forKey: kNavLoc)
+        }
     }
 }
 
 @available(iOS 16.0, *)
 extension NavRouter {
+    /// The live path bound to `NavigationStack`. The getter reflects the typed mirror; the
+    /// setter only has to cope with the user popping the stack (native back button / edge
+    /// swipe), since every app-initiated change goes through `syncPath()` with `isSyncing`.
     var path: NavigationPath {
         get { (pathStorage as? NavigationPath) ?? NavigationPath() }
         set {
+            let oldCount = (pathStorage as? NavigationPath)?.count ?? 0
             objectWillChange.send()
             pathStorage = newValue
-            // Persist here, synchronously on every change — not via .onChange, which gets
-            // coalesced away when NavigationStack writes through the binding during its own
-            // update (that was the bug: the drill-down never got saved).
-            persist(newValue)
+            if !isSyncing && newValue.count < oldCount {
+                handleExternalPop(removing: oldCount - newValue.count)
+            }
         }
     }
+
     /// Binding for `NavigationStack(path:)`.
     var pathBinding: Binding<NavigationPath> {
         Binding(get: { self.path }, set: { self.path = $0 })
     }
 
-    /// Encode the drill-down so the app reopens on the same page. Empty/uncodable → clear.
-    func persist(_ p: NavigationPath) {
-        if !p.isEmpty, let c = p.codable, let data = try? JSONEncoder().encode(c) {
-            UserDefaults.standard.set(data, forKey: kNavPath)
-        } else {
-            UserDefaults.standard.removeObject(forKey: kNavPath)
+    /// Rebuild the opaque path from the typed mirror, marking the write as app-initiated.
+    func syncPath() {
+        isSyncing = true
+        var p = NavigationPath()
+        for v in current.values { v.append(to: &p) }
+        objectWillChange.send()
+        pathStorage = p
+        isSyncing = false
+    }
+
+    /// The user popped the stack directly (native back button or left-edge swipe). Mirror
+    /// that into the history so swipe-forward still works afterwards.
+    private func handleExternalPop(removing n: Int) {
+        var k = n
+        while k > 0 && history.count > 1 {
+            forward.append(history.removeLast())
+            k -= 1
         }
+        persistCurrent()
+    }
+}
+
+/// Custom ‹ Back chevron for section-root pages (Popular, Artists, …, Settings, Help),
+/// which — being the root of the NavigationStack — have no native back button. Shown only
+/// when there is somewhere to go back to. Drill-down pages keep their native chevron, so
+/// this never overlaps it. Styled to sit where a nav-bar back button would.
+/// A circular caret button matching the system back button that drill-down pages show
+/// (a chevron in a soft circle). Used for the section-root back/forward controls so they
+/// look identical to the native one.
+struct CaretButton: View {
+    var systemImage: String
+    var label: String
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(Color(.systemGray5)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+/// Section-root ‹ Back — a circular caret identical to the drill-down native back button.
+struct BackChevron: View {
+    var action: () -> Void
+    var body: some View {
+        CaretButton(systemImage: "chevron.backward", label: "Back", action: action)
+    }
+}
+
+/// Forward › — the mirror of `BackChevron` (same circular caret, pointing right), for
+/// redoing a back you just made. Appears in the section-root bar and overlaid on
+/// drill-down pages whenever the forward stack is non-empty.
+struct ForwardChevron: View {
+    var action: () -> Void
+    var body: some View {
+        CaretButton(systemImage: "chevron.forward", label: "Forward", action: action)
     }
 }
 
@@ -291,9 +492,45 @@ struct ModernNavHost<Root: View>: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
+        VStack(spacing: 0) {
+            // Custom ‹ Back / Forward › bar for section-root pages only (drill-down pages have
+            // the native back chevron + the forward overlay below). A real row that pushes
+            // content down, so it never overlaps the filter bar. Shown when there's history
+            // to move through in either direction.
+            if router.path.isEmpty && (router.canGoBack || router.canGoForward) {
+                HStack(spacing: 0) {
+                    if router.canGoBack { BackChevron { router.goBack() } }
+                    Spacer(minLength: 0)
+                    if router.canGoForward { ForwardChevron { router.goForward() } }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color(.systemBackground))
+            }
+            navStack
+                // Drill-down pages keep the native back chevron but have no native forward;
+                // overlay a Forward › (aligned with the native back) when there's somewhere
+                // forward to go.
+                .overlay(alignment: .topTrailing) {
+                    if !router.path.isEmpty && router.canGoForward {
+                        ForwardChevron { router.goForward() }
+                            .padding(.trailing, 12)
+                            .padding(.top, 6)
+                    }
+                }
+        }
+        .onChange(of: model.catalogReady) { ready in if ready { router.restoreIfNeeded(catalogReady: true) } }
+        .onAppear { router.restoreIfNeeded(catalogReady: model.catalogReady) }
+    }
+
+    private var navStack: some View {
         NavigationStack(path: router.pathBinding) {
             root()
                 .background(InteractivePopGestureEnabler())   // swipe-back with a hidden nav bar
+                // Full-width swipe: right = back, left = forward. Attached here (inside the
+                // NavigationStack root) so it finds the nav controller and covers every page.
+                .background(BackForwardSwipeInstaller(onBack: { router.goBack() },
+                                                      onForward: { router.goForward() }))
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: Artist.self) { ArtistDetailView(artist: $0).onAppear { highlight(.artists) } }
                 .navigationDestination(for: Album.self) { AlbumDetailView(album: $0).onAppear { highlight(nil) } }
@@ -304,51 +541,16 @@ struct ModernNavHost<Root: View>: View {
                 .navigationDestination(for: UserPlaylistRef.self) { PlaylistDetailView(playlistID: $0.id, name: $0.name).onAppear { highlight(.myPlaylists) } }
                 .navigationDestination(for: RecentlyPlayedRef.self) { _ in RecentlyPlayedView().onAppear { highlight(.myPlaylists) } }
                 .navigationDestination(for: RecommendedRef.self) { _ in RecommendedView().onAppear { highlight(.myPlaylists) } }
-        }
-        .overlay(alignment: .topLeading) {
-            if !router.path.isEmpty {
-                NavBackButton { if !router.path.isEmpty { router.path.removeLast() } }
-            }
+                .navigationDestination(for: HelpRef.self) { _ in HelpView().onAppear { highlight(nil) } }
         }
         .scrollContentBackground(.hidden)
         .onChange(of: router.path) { newPath in
             if newPath.isEmpty { navHighlight = nil }
         }
-        .onChange(of: router.resetToken) { _ in router.path = NavigationPath() }
-        .onChange(of: router.pushToken) { _ in applyPush() }
-        .onChange(of: model.catalogReady) { ready in if ready { restoreIfNeeded() } }
-        .onAppear { restoreIfNeeded() }
-    }
-
-    /// Append the router's pending value with its concrete type (NavigationPath matches
-    /// destinations by exact type, so we can't append the AnyHashable wrapper).
-    private func applyPush() {
-        guard let v = router.pendingPush else { return }
-        switch v.base {
-        case let a as Artist:           router.path.append(a)
-        case let al as Album:           router.path.append(al)
-        case let asng as AlbumSong:     router.path.append(asng)
-        case let g as Genre:            router.path.append(g)
-        case let t as Tag:              router.path.append(t)
-        case let cp as CatalogPlaylist: router.path.append(cp)
-        case let up as UserPlaylistRef: router.path.append(up)
-        default: break
-        }
-        router.pendingPush = nil
     }
 
     private func highlight(_ item: SidebarItem?) {
         DispatchQueue.main.async { navHighlight = item }
-    }
-
-    private func restoreIfNeeded() {
-        guard !router.didRestorePath, model.catalogReady else { return }
-        router.didRestorePath = true
-        guard let data = UserDefaults.standard.data(forKey: kNavPath),
-              let rep = try? JSONDecoder().decode(NavigationPath.CodableRepresentation.self, from: data)
-        else { NSLog("MAGNAV restore: no saved nav.path"); return }
-        router.path = NavigationPath(rep)
-        NSLog("MAGNAV restore: applied path count=%d", router.path.count)
     }
 }
 

@@ -450,11 +450,15 @@ struct HelpSection: Identifiable {
     let blocks: [HelpBlock]
 }
 
-/// The Help page, shown in the main content area like any other section. Opened by
-/// tapping the mascot in the sidebar or Settings → "App Help". Bolded section names in
-/// the text are rendered as tappable links that jump to that section (see linkifyHelp).
+/// Navigation target for the Help page. Help is a pushed destination (not a top-level
+/// section) so it gets the native ‹ Back chevron and joins the browser-style history.
+struct HelpRef: Hashable, Codable {}
+
+/// The Help page, pushed onto the nav stack from the sidebar mascot or Settings → "App
+/// Help". Bolded section names in the text are tappable links that jump to that section
+/// (see linkifyHelp); tapping one switches sections through the router.
 struct HelpView: View {
-    var onNavigate: (SidebarItem) -> Void = { _ in }
+    @EnvironmentObject private var router: NavRouter
 
     var body: some View {
         ScrollView {
@@ -473,10 +477,14 @@ struct HelpView: View {
             .padding()
         }
         .navigationTitle("Help")
+        .navigationBarTitleDisplayMode(.inline)
+        .navBar(hidden: false)   // show the native ‹ Back chevron (root hides the bar)
         // Intercept the in-text "mag:<section>" links and navigate instead of opening a URL.
         .environment(\.openURL, OpenURLAction { url in
             if url.scheme == "mag" {
-                if let item = SidebarItem(rawValue: String(url.absoluteString.dropFirst(4))) { onNavigate(item) }
+                if let item = SidebarItem(rawValue: String(url.absoluteString.dropFirst(4))) {
+                    router.go(toSection: item.rawValue, updateSection: true)
+                }
                 return .handled
             }
             return .systemAction
