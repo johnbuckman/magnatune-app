@@ -371,6 +371,32 @@ struct AlbumDownloadButton: View {
     }
 }
 
+/// Non-member counterpart of `AlbumDownloadButton`: buy this one album for $8 on
+/// magnatune.com (opens the browser). Renders nothing for members — they download instead.
+struct AlbumBuyButton: View {
+    @EnvironmentObject var credentials: Credentials
+    @Environment(\.openURL) private var openURL
+    let sku: String
+    /// iPhone: a short "$8" label so the album action row still fits.
+    var compact = false
+    var body: some View {
+        if !credentials.isMember, !sku.isEmpty {
+            Button {
+                if let url = URLBuilder.albumBuyURL(sku: sku) { openURL(url) }
+            } label: {
+                Label(compact ? "$8" : "Buy this album — $8", systemImage: "cart")
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .fixedSize()
+            .help("Buy this album for $8; 100% goes to the musician")
+            .accessibilityLabel("Buy this album for $8; 100% goes to the musician")
+        }
+    }
+}
+
 struct SongDownloadButton: View {
     @EnvironmentObject var credentials: Credentials
     @Environment(\.openURL) private var openURL

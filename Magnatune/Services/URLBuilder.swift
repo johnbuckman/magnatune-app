@@ -146,6 +146,14 @@ enum URLBuilder {
         return c.url
     }
 
+    /// Buy one album (PayPal, $8, 100% to the musician) — opens in the browser.
+    static func albumBuyURL(sku: String) -> URL? {
+        var c = URLComponents()
+        c.scheme = "https"; c.host = host; c.path = "/buy/album"
+        c.queryItems = [URLQueryItem(name: "sku", value: sku)]
+        return c.url
+    }
+
     /// Single-song download — the per-track file (ext ∈ mp3/ogg/wav/flac/m4a). Member-gated
     /// by the same-origin /music handler, so it opens in a browser that can authenticate.
     static func songDownloadURL(artistName: String, albumName: String, song: Song, ext: String) -> URL? {

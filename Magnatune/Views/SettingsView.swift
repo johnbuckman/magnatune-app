@@ -32,7 +32,7 @@ struct SettingsView: View {
     private let albumDownloadFormats: [(String, String)] = [("vbr", "MP3 — high quality VBR (~88MB)"), ("mp3", "MP3 — 128k (smaller)"), ("aac", "AAC — for iTunes / iPod"), ("alac", "ALAC — Apple Lossless"), ("flac", "FLAC — lossless, open"), ("ogg", "OGG — high quality, open"), ("wav", "WAV — lossless, exact copy")]
     private let songDownloadFormats: [(String, String)] = [("mp3", "MP3 — high quality"), ("ogg", "OGG"), ("flac", "FLAC — lossless"), ("wav", "WAV — lossless")]
 
-    enum SignInResult { case success, failure }
+    enum SignInResult { case success, failure(String) }
 
     private var favoritesCount: Int {
         user.favoriteSongIDs.count + user.favoriteAlbumIDs.count + user.favoriteArtistIDs.count
@@ -57,9 +57,14 @@ struct SettingsView: View {
                     Button("Sign Out", role: .destructive) {
                         creds.clear(); username = ""; password = ""; result = nil
                     }
-                    Text("Member streams play in higher quality with no spoken interruption at the end of tracks.")
+                    Text("Tracks stream without the voice overlay.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Link("Your membership, licence & billing →", destination: URL(string: "https://magnatune.com/member/account")!)
                 } else {
+                    if let notice = creds.membershipNotice {
+                        Label(notice, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     TextField("Username", text: $username)
                         .textContentType(.username)
                         .autocorrectionDisabled()
@@ -78,14 +83,28 @@ struct SettingsView: View {
                     switch result {
                     case .success:
                         Label("Credentials verified", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                    case .failure:
-                        Label("Login failed — check your username and password", systemImage: "xmark.octagon.fill")
+                    case .failure(let message):
+                        Label(message, systemImage: "xmark.octagon.fill")
                             .foregroundStyle(.red)
                     case nil:
-                        Text("Without a membership, tracks stream for free but include a spoken announcement at the end of each track.")
+                        Text("Log in to stream tracks without the voice overlay.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Link("Get a membership", destination: URL(string: "https://magnatune.com/member/signup")!)
+                    VStack(spacing: 6) {
+                        Link(destination: URL(string: "https://magnatune.com/member/signup")!) {
+                            Text("Become a member")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.roundedRectangle)
+                        .controlSize(.large)
+                        .tint(.accentColor)
+                        Text("$10 a month, $99 a year, or $299 for life.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
                 }
             }
 
@@ -282,17 +301,19 @@ struct SettingsView: View {
 
             Section("About") {
                 LabeledRow("App", value: "Magnatune Player \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
-                Text("Music licensed Creative Commons by Magnatune (magnatune.com).")
+                Text("Music © the artists, licensed Creative Commons BY-NC-SA for non-commercial use; commercial use with the Magnatune Project Licence.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Why we are not evil") { showWhyNotEvil = true }
                 Button("Founder's Rant") { showFoundersRant = true }
-                Link("FAQ", destination: URL(string: "https://magnatune.com/info/faq_buyers")!)
-                Link("Music licensing", destination: URL(string: "https://magnatune.com/info/licensing")!)
+                Link("FAQ", destination: URL(string: "https://magnatune.com/info/faq")!)
+                Link("Magnatune Project Licence", destination: URL(string: "https://magnatune.com/info/licensing")!)
+                Link("Creative Commons", destination: URL(string: "https://magnatune.com/info/cc_licensed")!)
                 Link("Give away our music", destination: URL(string: "https://magnatune.com/info/give")!)
                 Link("Podcast our music", destination: URL(string: "https://magnatune.com/info/podcast")!)
                 Link("Gift cards", destination: URL(string: "https://magnatune.com/buy/gift_cards")!)
                 Link("Terms of use", destination: URL(string: "https://magnatune.com/terms_of_use")!)
                 Link("APIs, RSS & XML", destination: URL(string: "https://magnatune.com/info/api")!)
+                Link("For musicians", destination: URL(string: "https://magnatune.com/info/terms")!)
                 Link("Contact Magnatune", destination: URL(string: "https://magnatune.com/info/contact")!)
                 Button {
                     onShowHelp()
@@ -361,14 +382,17 @@ struct SettingsView: View {
         checking = true
         result = nil
         Task {
-            let ok = await Credentials.verify(username: username, password: password)
+            let status = await Credentials.verify(username: username, password: password)
             await MainActor.run {
                 checking = false
-                if ok {
+                switch status {
+                case .member:
                     creds.save(username: username, password: password)
                     result = .success
-                } else {
-                    result = .failure
+                case .notMember(_, let error):
+                    result = .failure(error ?? "Login failed — check your username and password")
+                case .unreachable:
+                    result = .failure("Can't reach magnatune.com — check your connection.")
                 }
             }
         }
@@ -381,15 +405,14 @@ let whyNotEvilPoints: [String] = [
     "Fantastic music: we work with artists directly, not with record labels, and all our music is hand-picked. On average, we accept 3% of submissions.",
     "Perfect audio quality: our music is available in both lossless and smaller-size \"lossy\" formats.",
     "Many audio formats: albums download as WAV, super-high-quality VBR MP3, AAC, Apple Lossless (ALAC), and open-source-friendly FLAC, OGG and OPUS.",
-    "Listen to everything: all our albums can be heard in their entirety before you buy.",
-    "Download everything: once you've paid, download anything from our entire catalog — no limits.",
-    "Musicians get paid: 50% of your purchase price goes directly to the musician, not to labels and their lawyers.",
-    "Name your price: you choose how much to pay, and 50% of your choice goes to the artist.",
+    "Listen to everything: listen to every album in full, free. Free streams have a short spoken voice every 30 seconds; members hear the music without it.",
+    "Download everything: members can download anything from our entire catalog, no limits.",
+    "Musicians get paid: when you buy an album for $8, 100% goes straight to the musician. Magnatune keeps nothing.",
+    "Make things with our music: members can use our music in their own projects under the Magnatune Project Licence.",
     "Give to your friends: we encourage you to give 3 copies of any music from your membership to your friends.",
-    "Creative Commons: our 128k MP3s are some-rights-reserved Creative Commons licensed.",
+    "Creative Commons: all our music is licensed Creative Commons BY-NC-SA for non-commercial sharing and reuse.",
     "Remix friendly: tons of our music, acapellas and samples are available for remixing at CC Mixter.",
     "100% legal: Magnatune is completely legal all over the world.",
-    "Licensing: all our music can be licensed for commercial use instantly and online, with no additional permissions.",
     "Artists direct: we sign contracts directly with musicians — no middlemen in the way of the artist's royalties.",
     "Podcast-legal: non-commercial podcasters can use our music for free.",
     "No major labels: we have nothing to do with major labels, their lawyers or the RIAA.",
@@ -531,7 +554,7 @@ private func linkifyHelp(_ s: String) -> String {
 let helpSections: [HelpSection] = [
     HelpSection(title: "Welcome to Magnatune", blocks: [
         .text("Magnatune is an independent record label founded in 2003 on a simple idea: be fair to musicians and fair to listeners. Our motto is \u{201C}we are not evil.\u{201D}"),
-        .text("Every album is hand-picked — we accept about 3% of submissions — and you can listen to everything in full before you decide to buy. When you do buy, half the money goes straight to the artist. All the music is Creative Commons licensed, with no copy protection (DRM)."),
+        .text("Every album is hand-picked — we accept about 3% of submissions — and you can listen to everything in full, for free. When you buy an album, 100% of the money goes straight to the musician. All the music is Creative Commons licensed, with no copy protection (DRM)."),
         .text("This app streams Magnatune's entire catalog: hundreds of artists across classical, jazz, electronica, rock, ambient, world and more."),
     ]),
     HelpSection(title: "Finding your way around", blocks: [
@@ -572,8 +595,10 @@ let helpSections: [HelpSection] = [
         .bullet("Inside a playlist you can reorder tracks, remove them, or delete the playlist."),
     ]),
     HelpSection(title: "Membership & sound quality", blocks: [
-        .text("You can stream everything for free. Free streams include a short spoken announcement at the end of each track."),
-        .text("A Magnatune membership removes the announcement, unlocks higher-quality audio, and lets you download music. Sign in under **Settings** → Magnatune Membership."),
+        .text("You can listen to everything for free. Free streams have a short spoken voice overlaid on the music every 30 seconds."),
+        .text("A Magnatune membership ($10 a month, $99 a year or $299 for life) removes the voice overlay, unlocks higher-quality audio, and lets you download any album. Join or sign in under **Settings** → Magnatune Membership."),
+        .text("You can also buy any single album for $8: 100% of your payment goes to the musician."),
+        .text("Make things with our music: members can use it in their own projects (videos, podcasts, games, client work) under the Magnatune Project Licence."),
         .bullet("Members can choose **Normal** or **High** Opus quality in **Settings**."),
     ]),
     HelpSection(title: "Offline listening", blocks: [

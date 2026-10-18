@@ -18,6 +18,11 @@ final class Credentials: ObservableObject {
     /// the clean file immediately; the launch re-verify downgrades an expired membership.
     @Published private(set) var isMember: Bool = false
 
+    /// Why the launch re-check signed the user out, e.g. the server's "Your Magnatune
+    /// membership has ended…" message (`reason == "ended"`). Shown once in Settings →
+    /// Magnatune Membership; cleared by a successful sign-in or sign-out.
+    @Published var membershipNotice: String?
+
     init() {
         // Prefer the keychain copy of the username (it rides iCloud Keychain, so it survives a
         // reinstall); fall back to the local UserDefaults mirror. Keep the mirror in sync.
@@ -34,6 +39,7 @@ final class Credentials: ObservableObject {
         keychainWrite(usernameAccount, username)   // durable copy — survives reinstall via iCloud Keychain
         writePassword(password)
         hasPassword = !password.isEmpty
+        membershipNotice = nil
         // save() is only called by Settings after a successful server verify.
         isMember = !username.isEmpty && !password.isEmpty
     }
@@ -45,6 +51,7 @@ final class Credentials: ObservableObject {
         deletePassword()
         hasPassword = false
         isMember = false
+        membershipNotice = nil
     }
 
     // MARK: HTTP Basic for media
@@ -72,9 +79,18 @@ final class Credentials: ObservableObject {
             return
         }
         switch await Credentials.membershipStatus(username: username, password: pw) {
-        case .member:      isMember = true
-        case .notMember:   isMember = false
-        case .unreachable: break          // keep last-known status on a network blip
+        case .member:
+            isMember = true
+            membershipNotice = nil
+        case .notMember(let reason, let error):
+            isMember = false
+            // A lapsed membership: keep the stored login (the user can rejoin on the web with
+            // the same username and password) and tell them why streams went back to free.
+            if reason == "ended" {
+                membershipNotice = error ?? "Your Magnatune membership has ended. Rejoin at magnatune.com/member/signup with the same username and password."
+            }
+        case .unreachable:
+            break          // keep last-known status on a network blip
         }
     }
 
@@ -89,17 +105,24 @@ final class Credentials: ObservableObject {
 
     /// Outcome of a membership check: a definite server verdict, or `unreachable` when
     /// the network prevented a verdict (so callers can avoid signing a member out on a blip).
-    enum MembershipStatus { case member, notMember, unreachable }
+    /// A refusal carries the server's `reason` (e.g. `"ended"` for a lapsed membership) and
+    /// its human-readable `error` text, when it sent them.
+    enum MembershipStatus: Equatable {
+        case member
+        case notMember(reason: String?, error: String?)
+        case unreachable
+    }
 
     /// Check a username/password against the same-origin SPA endpoint (navim4's
-    /// `m3_check_member`), which POSTs `user=`/`pw=` and answers a tiny JSON verdict:
-    /// `{"ok":true,"user":…}` ⇒ `.member`, `{"ok":false}` ⇒ `.notMember`, network failure
-    /// ⇒ `.unreachable`. It is backed by the same membership check that gates `/music`,
-    /// so the UI unlock always matches what can actually be streamed.
+    /// `m3_check_member`), which POSTs `user=`/`pw=` and answers HTTP 200 with a tiny JSON
+    /// verdict: `{"ok":true,"user":…}` ⇒ `.member`; `{"ok":false,"reason":…,"error":…}` ⇒
+    /// `.notMember` (reason/error optional); network failure or a 5xx ⇒ `.unreachable`. It is
+    /// backed by the same membership check that gates `/music`, so the UI unlock always
+    /// matches what can actually be streamed.
     static func membershipStatus(username: String, password: String) async -> MembershipStatus {
         guard !username.isEmpty, !password.isEmpty,
               let url = URL(string: "https://\(URLBuilder.host)/membership/check.php")
-        else { return .notMember }
+        else { return .notMember(reason: nil, error: nil) }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -110,18 +133,33 @@ final class Credentials: ObservableObject {
         req.timeoutInterval = 20
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return .notMember }
-            let body = String(decoding: data, as: UTF8.self).replacingOccurrences(of: " ", with: "")
-            return body.contains("\"ok\":true") ? .member : .notMember
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code >= 500 { return .unreachable }          // server trouble ≠ a wrong password
+            guard code == 200 else { return .notMember(reason: nil, error: nil) }
+            return parseCheckResponse(data)
         } catch {
             return .unreachable
         }
     }
 
-    /// Verify a username/password. Returns true only on a definite server acceptance
-    /// (HTTP 200) — used by the Settings sign-in flow, which must not save on failure.
-    static func verify(username: String, password: String) async -> Bool {
-        await membershipStatus(username: username, password: password) == .member
+    /// Decode a `check.php` JSON body. Anything that isn't `"ok": true` is a refusal; the
+    /// optional `reason`/`error` strings are passed through for the UI.
+    static func parseCheckResponse(_ data: Data) -> MembershipStatus {
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return .notMember(reason: nil, error: nil)
+        }
+        if (obj["ok"] as? Bool) == true { return .member }
+        let nonEmpty = { (v: Any?) -> String? in
+            guard let s = (v as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+            return s
+        }
+        return .notMember(reason: nonEmpty(obj["reason"]), error: nonEmpty(obj["error"]))
+    }
+
+    /// Verify a username/password — used by the Settings sign-in flow, which saves only on
+    /// `.member` and otherwise shows the server's error text (or a network message).
+    static func verify(username: String, password: String) async -> MembershipStatus {
+        await membershipStatus(username: username, password: password)
     }
 
     // MARK: Keychain primitives

@@ -77,7 +77,7 @@ its extension dropped (e.g. `01-Title-artist.mp3` → `01-Title-artist`).
 
 | File | What | Access |
 |---|---|---|
-| `<stem>_spoken.m4a` | AAC advert (end‑of‑track announcement) | **free** |
+| `<stem>_spoken.m4a` | AAC free stream (spoken voice overlaid every 30 s) | **free** |
 | `<stem>_spoken.opus` | 40 kbps Opus advert | **free** |
 | `<stem>.m4a` | **185 kbps AAC** | member |
 | `<stem>.opus` | **96 kbps Opus** ← "Normal" | member |
@@ -95,8 +95,14 @@ proves the file exists.
 
 Covers: `cover_<N>.jpg` (50,75,100,150,200,300,400,600,800,1400; webp for a subset). Artist
 photos: `artist_<N>.jpg` per album dir. Catalog: `/info/sqlite_normalized.sql.gz`, version
-CRC `/info/changed.txt`. Membership check: `POST /membership/check.php` (`user=`/`pw=` →
-`{"ok":true|false}`). Album zip: `/membership/download3?sku=&format=`.
+CRC `/info/changed.txt`. Membership check: `POST /membership/check.php` (`user=`/`pw=`) — always HTTP 200 JSON:
+`{"ok":true,…}` for a member; otherwise `{"ok":false}` plus optional `"reason"` and a
+human-readable `"error"` (a lapsed member gets `"reason":"ended"` and an `"error"` telling them
+to rejoin at `/member/signup` with the same login). `Credentials.parseCheckResponse` carries
+both through: Settings shows `error` on a failed sign-in, and the launch re-check shows the
+"ended" message (orange) in Settings → Membership while keeping the stored login. Memberships
+are sold at `/member/signup` ($10/mo, $99/yr, $299 lifetime; Stripe), managed at
+`/member/account`; non-members can buy one album at `/buy/album?sku=<SKU>` ($8, PayPal). Album zip: `/membership/download3?sku=&format=`.
 
 ---
 

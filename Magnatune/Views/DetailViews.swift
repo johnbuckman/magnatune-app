@@ -163,6 +163,7 @@ struct AlbumDetailView: View {
                                 .disabled(shown.isEmpty)
                             FavoriteButton(kind: "album", id: album.id)
                             AlbumDownloadButton(sku: album.sku)
+                            AlbumBuyButton(sku: album.sku, compact: isPhone)
                             AddToPlaylistButton { shown.map { $0.song.id } }
                         }
                     }
