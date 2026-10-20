@@ -140,6 +140,7 @@ func magnatuneDestination(for value: AnyHashable) -> some View {
     case let cp as CatalogPlaylist: CatalogPlaylistDetailView(playlist: cp)
     case let up as UserPlaylistRef: PlaylistDetailView(playlistID: up.id, name: up.name)
     case is RecentlyPlayedRef:     RecentlyPlayedView()
+    case is DownloadsRef:          DownloadsView()
     case is RecommendedRef:        RecommendedView()
     case is HelpRef:               HelpView()
     default:                       EmptyView()
@@ -203,6 +204,7 @@ enum NavValue: Hashable, Codable {
     case catalogPlaylist(CatalogPlaylist)
     case userPlaylist(UserPlaylistRef)
     case recentlyPlayed
+    case downloads
     case recommended
     case help
 
@@ -217,6 +219,7 @@ enum NavValue: Hashable, Codable {
         case let cp as CatalogPlaylist: self = .catalogPlaylist(cp)
         case let up as UserPlaylistRef: self = .userPlaylist(up)
         case is RecentlyPlayedRef:      self = .recentlyPlayed
+        case is DownloadsRef:           self = .downloads
         case is RecommendedRef:         self = .recommended
         case is HelpRef:                self = .help
         default:                        return nil
@@ -237,6 +240,7 @@ enum NavValue: Hashable, Codable {
         case .catalogPlaylist(let c): path.append(c)
         case .userPlaylist(let u):    path.append(u)
         case .recentlyPlayed:         path.append(RecentlyPlayedRef())
+        case .downloads:              path.append(DownloadsRef())
         case .recommended:            path.append(RecommendedRef())
         case .help:                   path.append(HelpRef())
         }
@@ -253,6 +257,7 @@ enum NavValue: Hashable, Codable {
         case .catalogPlaylist(let c): return AnyHashable(c)
         case .userPlaylist(let u):    return AnyHashable(u)
         case .recentlyPlayed:         return AnyHashable(RecentlyPlayedRef())
+        case .downloads:              return AnyHashable(DownloadsRef())
         case .recommended:            return AnyHashable(RecommendedRef())
         case .help:                   return AnyHashable(HelpRef())
         }
@@ -540,6 +545,7 @@ struct ModernNavHost<Root: View>: View {
                 .navigationDestination(for: CatalogPlaylist.self) { CatalogPlaylistDetailView(playlist: $0).onAppear { highlight(nil) } }
                 .navigationDestination(for: UserPlaylistRef.self) { PlaylistDetailView(playlistID: $0.id, name: $0.name).onAppear { highlight(.myPlaylists) } }
                 .navigationDestination(for: RecentlyPlayedRef.self) { _ in RecentlyPlayedView().onAppear { highlight(.myPlaylists) } }
+                .navigationDestination(for: DownloadsRef.self) { _ in DownloadsView().onAppear { highlight(.myPlaylists) } }
                 .navigationDestination(for: RecommendedRef.self) { _ in RecommendedView().onAppear { highlight(.myPlaylists) } }
                 .navigationDestination(for: HelpRef.self) { _ in HelpView().onAppear { highlight(nil) } }
         }

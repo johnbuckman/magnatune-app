@@ -116,6 +116,7 @@ struct RootView: View {
             .environment(\.isPhoneLayout, isCompact)
             .environmentObject(model)
             .environmentObject(model.audio)
+            .environmentObject(model.downloads)
         }
         .background(MacWindowConfigurator())
         .environmentObject(router)
@@ -140,10 +141,13 @@ struct RootView: View {
     /// sidebar (regular) and tab-bar (compact) layouts. iOS 16+ gets the full value-based
     /// NavigationStack (ModernNavHost); iOS 15 falls back to a NavigationView-based host.
     @ViewBuilder private var mainNavStack: some View {
-        if #available(iOS 16.0, *) {
-            ModernNavHost(router: router, navHighlight: $navHighlight) { content }
-        } else {
-            LegacyNavHost(router: router) { content }
+        VStack(spacing: 0) {
+            if !model.isOnline { OfflineBanner() }
+            if #available(iOS 16.0, *) {
+                ModernNavHost(router: router, navHighlight: $navHighlight) { content }
+            } else {
+                LegacyNavHost(router: router) { content }
+            }
         }
     }
 
@@ -328,7 +332,7 @@ struct RootView: View {
     /// shown in light grey while offline. Favorites (your downloads), Search and
     /// Settings stay at full strength.
     private static let greyWhenOffline: Set<SidebarItem> =
-        [.popular, .artists, .albums, .genres, .tags, .playlists, .songs, .myPlaylists]
+        [.popular, .artists, .albums, .genres, .tags, .playlists, .songs]   // My Playlists stays live: it holds Downloads
 
     private func labelColor(_ item: SidebarItem) -> Color {
         if !model.isOnline && RootView.greyWhenOffline.contains(item) {

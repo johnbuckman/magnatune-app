@@ -542,6 +542,7 @@ struct SongRow: View {
             }
             Spacer()
             Text(track.song.durationText).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            DownloadStatusIcon(songID: track.song.id)
             FavoriteButton(kind: "song", id: track.song.id)
             SongDownloadButton(track: track)
             AddToPlaylistButton { [track.song.id] }
@@ -595,6 +596,71 @@ struct SongRow: View {
         } else {
             Color.clear.frame(width: 26)
         }
+    }
+}
+
+/// Offline-download status of one favorited song: ✓ downloaded, spinner while downloading,
+/// clock while queued, warning when it failed (tap to retry). Renders nothing for songs the
+/// favorites don't keep.
+struct DownloadStatusIcon: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var downloads: DownloadProgress
+    let songID: Int64
+    var body: some View {
+        switch downloads.state(of: songID) {
+        case .downloaded:
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(Color.secondary).font(.footnote)
+                .help("Downloaded — plays offline")
+        case .downloading:
+            ProgressView().controlSize(.mini).frame(width: 14, height: 14)
+                .help("Downloading…")
+        case .queued:
+            Image(systemName: downloads.pausedOffline ? "pause.circle" : "clock")
+                .foregroundStyle(Color.secondary).font(.footnote)
+                .help(downloads.pausedOffline ? "Waiting for network" : "Waiting to download")
+        case .failed:
+            Button { model.retryFailedDownloads() } label: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color.orange).font(.footnote)
+            }
+            .buttonStyle(.borderless)
+            .help("Download failed — tap to retry")
+        case nil:
+            EmptyView()
+        }
+    }
+}
+
+/// Roll-up download status for an album or artist ("12 of 14 songs downloaded").
+/// Renders nothing when none of the songs is kept by a favorite.
+struct DownloadSummaryLabel: View {
+    @EnvironmentObject var downloads: DownloadProgress
+    let songIDs: [Int64]
+    var body: some View {
+        if let s = downloads.summary(of: songIDs) {
+            let done = s.done == s.total
+            Label(done ? (s.total == 1 ? "Downloaded" : "All \(s.total) songs downloaded")
+                       : "\(s.done) of \(s.total) songs downloaded" + (s.failed > 0 ? " · \(s.failed) failed" : ""),
+                  systemImage: done ? "arrow.down.circle.fill" : "arrow.down.circle")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Slim strip shown above the content while the device is offline.
+struct OfflineBanner: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        let n = model.downloadedSongIDs.count
+        Label(n == 0 ? "Offline — nothing downloaded yet"
+                     : "Offline — showing your \(n) downloaded song\(n == 1 ? "" : "s")",
+              systemImage: "wifi.slash")
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(Color(.systemGray5))
     }
 }
 

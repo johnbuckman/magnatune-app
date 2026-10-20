@@ -23,8 +23,19 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     static let key = "appearance"
 }
 
+/// Receives the relaunch iOS performs to deliver finished background downloads.
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        guard identifier == DownloadStore.sessionID else { completionHandler(); return }
+        DownloadStore.shared.backgroundCompletionHandler = completionHandler
+        DownloadStore.shared.adoptPendingTasks { _ in }   // reconnect the session to receive its events
+    }
+}
+
 @main
 struct MagnatuneApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
     @AppStorage(AppAppearance.key) private var appearanceRaw = AppAppearance.system.rawValue
     @Environment(\.scenePhase) private var scenePhase
@@ -37,6 +48,7 @@ struct MagnatuneApp: App {
                 .environmentObject(model.userStore)
                 .environmentObject(model.credentials)
                 .environmentObject(model.audio)
+                .environmentObject(model.downloads)
                 .task {
                     await model.credentials.refreshMembership()   // verify membership once, at launch
                     await model.cloudSync.pull()                  // pull+merge this member's cloud settings

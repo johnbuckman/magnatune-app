@@ -39,6 +39,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var downloadedGenreIDs: Set<Int64> = []
     @Published private(set) var downloadedTagIDs: Set<Int64> = []
     @Published private(set) var downloadedCatalogPlaylistIDs: Set<Int64> = []
+    /// Per-song status of the favorites auto-download queue (icons, Downloads playlist).
+    let downloads = DownloadProgress()
 
     // MARK: Dislikes (suppress-from-UI)
     static let hideDislikesKey = "dislike.hide.enabled"
@@ -98,7 +100,6 @@ final class AppModel: ObservableObject {
     private let pathMonitor = NWPathMonitor()
     private var favoritesObserver: AnyCancellable?
     private var membershipObserver: AnyCancellable?
-    private var autoDownloadTask: Task<Void, Never>?
     private var peerCancellables: Set<AnyCancellable> = []
     private var heartbeatTimer: Timer?
     /// Wall-clock when local playback last started (for most-recent-play-wins auto-stop).
@@ -117,6 +118,7 @@ final class AppModel: ObservableObject {
         sync.ensureSeeded()
         openCatalog()
         refreshDownloadedSets()
+        observeDownloadStore()
         startNetworkMonitor()
 
         // On any favorites/dislikes change: drop redundant favorites, refresh the dislike
@@ -575,8 +577,10 @@ final class AppModel: ObservableObject {
     private func setOnline(_ online: Bool) {
         guard online != isOnline else { return }
         isOnline = online
-        // Coming back online: pick up any favorites added while offline.
+        // Coming back online: pick up any favorites added while offline (and resume the
+        // queue). Going offline: the running sync notices and pauses.
         if online, autoDownloadFavorites { syncAutoDownloads() }
+        else if !online { downloads.setPausedOffline(downloads.pendingCount > 0) }
     }
 
     // MARK: Auto-download of favorites
@@ -584,7 +588,13 @@ final class AppModel: ObservableObject {
     func setAutoDownloadFavorites(_ on: Bool) {
         autoDownloadFavorites = on
         UserDefaults.standard.set(on, forKey: Self.autoDownloadKey)
-        if on { syncAutoDownloads() } else { autoDownloadTask?.cancel() }
+        if on { syncAutoDownloads() } else { DownloadStore.shared.cancelAll(); downloads.clear() }
+    }
+
+    /// Put failed downloads back in the queue and run the sync again.
+    func retryFailedDownloads() {
+        downloads.retryFailed()
+        syncAutoDownloads()
     }
 
     /// Recompute the downloaded-content id sets from disk + catalog so the offline
@@ -592,6 +602,7 @@ final class AppModel: ObservableObject {
     func refreshDownloadedSets() {
         let songIDs = DownloadStore.shared.downloadedIDs()
         downloadedSongIDs = songIDs
+        downloads.setTargets(downloads.targetIDs, downloaded: songIDs)
         guard let c = catalog, !songIDs.isEmpty else {
             downloadedAlbumIDs = []; downloadedArtistIDs = []
             downloadedGenreIDs = []; downloadedTagIDs = []; downloadedCatalogPlaylistIDs = []
@@ -617,50 +628,74 @@ final class AppModel: ObservableObject {
         // Auto-download is members-only: non-members get nothing, and any existing
         // downloads are removed (e.g. after a membership lapses or signs out).
         guard credentials.isMember else {
-            autoDownloadTask?.cancel()
+            DownloadStore.shared.cancelAll()
+            downloads.clear()
             if DownloadStore.shared.count() > 0 {
                 DownloadStore.shared.clear()
                 refreshDownloadedSets()
             }
             return
         }
-        autoDownloadTask?.cancel()
-        autoDownloadTask = Task { [weak self] in
+        let targets = favoriteSongs(using: c)
+        let targetIDs = Set(targets.map { $0.id })
+
+        // Delete downloads (and cancel transfers) no longer kept by any favorite.
+        let stale = DownloadStore.shared.downloadedIDs().subtracting(targetIDs)
+        for id in stale { DownloadStore.shared.remove(id) }
+        DownloadStore.shared.cancel(Set(downloads.targetIDs).subtracting(targetIDs))
+        downloads.setTargets(targets.map { $0.id }, downloaded: DownloadStore.shared.downloadedIDs())
+        if !stale.isEmpty { refreshDownloadedSets() }
+
+        // Hand every missing song to the background session. It runs them while the app is
+        // suspended and holds them until there's a network, so nothing here waits. Failed
+        // songs stay failed until an explicit retry.
+        let auth = credentials.basicAuthHeader()
+        for song in targets where downloads.state(of: song.id) == .queued {
+            guard let album = c.album(id: song.albumId), let artist = c.artist(id: album.artistId),
+                  let url = URLBuilder.downloadStreamURL(
+                    artistName: artist.name, albumName: album.name, song: song,
+                    quality: StreamQuality.current) else { continue }
+            DownloadStore.shared.enqueue(songID: song.id, remote: url, authHeader: auth)
+        }
+        downloads.setPausedOffline(!isOnline && downloads.pendingCount > 0)
+    }
+
+    /// Route background-session events into the published download state.
+    private func observeDownloadStore() {
+        DownloadStore.shared.onStarted = { [weak self] id in self?.downloads.begin(id) }
+        DownloadStore.shared.onFinished = { [weak self] id, ok, cancelled in
             guard let self else { return }
-            let targets = self.favoriteSongs(using: c)
-            let targetIDs = Set(targets.map { $0.id })
+            if cancelled && !ok { return }
+            self.downloads.finish(id, ok: ok)
+            if ok { self.scheduleDownloadedSetsRefresh() }
+            if self.downloads.pendingCount == 0 { self.downloads.setPausedOffline(false) }
+        }
+        DownloadStore.shared.adoptPendingTasks { _ in }
+    }
 
-            // Delete downloads no longer kept by any favorite.
-            let stale = DownloadStore.shared.downloadedIDs().subtracting(targetIDs)
-            if !stale.isEmpty {
-                for id in stale { DownloadStore.shared.remove(id) }
-                self.refreshDownloadedSets()
-            }
-
-            // Download anything newly favorited that isn't on disk.
-            var didChange = false
-            for song in targets {
-                if Task.isCancelled { break }
-                if DownloadStore.shared.isDownloaded(song.id) { continue }
-                guard let album = c.album(id: song.albumId), let artist = c.artist(id: album.artistId),
-                      let url = URLBuilder.downloadStreamURL(
-                        artistName: artist.name, albumName: album.name, song: song,
-                        quality: StreamQuality.current) else { continue }
-                let ok = await DownloadStore.shared.downloadAsync(
-                    songID: song.id, remote: url, authHeader: self.credentials.basicAuthHeader())
-                if ok { didChange = true; self.refreshDownloadedSets() }
-            }
-            if didChange { self.refreshDownloadedSets() }
+    /// Coalesce the catalog lookups behind `refreshDownloadedSets` while a batch of
+    /// downloads completes.
+    private var downloadedSetsRefresh: Task<Void, Never>?
+    private func scheduleDownloadedSetsRefresh() {
+        guard downloadedSetsRefresh == nil else { return }
+        downloadedSetsRefresh = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            self?.refreshDownloadedSets()
+            self?.downloadedSetsRefresh = nil
         }
     }
 
     /// All distinct songs implied by the user's favorites.
     private func favoriteSongs(using c: CatalogStore) -> [Song] {
-        var byID: [Int64: Song] = [:]
-        for id in userStore.favoriteIDs(kind: "song") { if let s = c.song(id: id) { byID[s.id] = s } }
-        for id in userStore.favoriteIDs(kind: "album") { for s in c.songs(forAlbum: id) { byID[s.id] = s } }
-        for id in userStore.favoriteIDs(kind: "artist") { for s in c.songs(forArtist: id) { byID[s.id] = s } }
-        return Array(byID.values)
+        // Ordered (favorite songs, then albums, then artists) so the download queue and the
+        // Downloads playlist follow the favorites order.
+        var seen = Set<Int64>()
+        var out: [Song] = []
+        func add(_ s: Song) { if seen.insert(s.id).inserted { out.append(s) } }
+        for id in userStore.favoriteIDs(kind: "song") { if let s = c.song(id: id) { add(s) } }
+        for id in userStore.favoriteIDs(kind: "album") { c.songs(forAlbum: id).forEach(add) }
+        for id in userStore.favoriteIDs(kind: "artist") { c.songs(forArtist: id).forEach(add) }
+        return out
     }
 
     // MARK: Offline visibility filters

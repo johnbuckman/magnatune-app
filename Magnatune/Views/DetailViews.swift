@@ -47,6 +47,7 @@ struct ArtistDetailView: View {
                     }
                     Spacer()
                 }
+                DownloadSummaryLabel(songIDs: tracks.map { $0.song.id })
                 if let bio = artist.bio ?? artist.description, !bio.isEmpty {
                     ExpandableText(text: bio)
                 }
@@ -151,6 +152,7 @@ struct AlbumDetailView: View {
                             Text(d.formatted(date: .abbreviated, time: .omitted))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                        DownloadSummaryLabel(songIDs: tracks.map { $0.song.id })
                         HStack {
                             let nowPlaying = audio.isPlaying && audio.current?.album.id == album.id
                             Button {

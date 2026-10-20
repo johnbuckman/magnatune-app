@@ -232,8 +232,10 @@ struct FavoritesView: View {
 // MARK: - Playlists
 
 struct PlaylistsView: View {
+    @EnvironmentObject var model: AppModel
     @EnvironmentObject var user: UserStore
     @EnvironmentObject var credentials: Credentials
+    @EnvironmentObject var downloads: DownloadProgress
     @State private var rows: [UserStore.PlaylistRow] = []
     @State private var recentCount = 0
     @State private var showNew = false
@@ -246,6 +248,21 @@ struct PlaylistsView: View {
             // swipe-to-delete below never touches it.
             NavLink(value: RecentlyPlayedRef()) {
                 HStack { Label("Recently Played", systemImage: "clock.arrow.circlepath"); Spacer(); Text("\(recentCount)").foregroundStyle(.secondary) }
+            }
+            // Auto-managed "Downloads" — every song your favorites keep for offline play,
+            // with live download status. Members with auto-download on only.
+            if credentials.isMember && model.autoDownloadFavorites {
+                NavLink(value: DownloadsRef()) {
+                    HStack {
+                        Label("Downloads", systemImage: "arrow.down.circle")
+                        Spacer()
+                        if downloads.pendingCount > 0 {
+                            Text("\(downloads.downloadedIDs.count) of \(downloads.targetIDs.count)").foregroundStyle(.secondary)
+                        } else {
+                            Text("\(downloads.targetIDs.count)").foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             // "Recommended" — members only; server-side recs from your Recently Played.
             if credentials.isMember {
@@ -385,6 +402,94 @@ struct RecentlyPlayedView: View {
     private func load() {
         guard let c = model.catalog else { return }
         tracks = c.makePlayable(songs: user.recentlyPlayedSongIDs(limit: Self.limit).compactMap { c.song(id: $0) })
+    }
+}
+
+// MARK: - Downloads (todo 10419631611)
+
+/// Hashable/Codable marker for the auto "Downloads" pseudo-playlist.
+struct DownloadsRef: Hashable, Codable {}
+
+/// Auto-managed "Downloads": every song implied by your favorites, with its offline-download
+/// status. Songs still downloading/queued/failed sort first, then downloaded ones in favorites
+/// order. Play/Shuffle play only the downloaded songs, so it's the thing to play offline.
+struct DownloadsView: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var audio: AudioPlayer
+    @EnvironmentObject var downloads: DownloadProgress
+    @State private var tracksByID: [Int64: PlayableTrack] = [:]
+
+    var body: some View {
+        let ordered = orderedTracks
+        let ready = ordered.filter { downloads.state(of: $0.id) == .downloaded }
+        List {
+            if downloads.targetIDs.isEmpty {
+                EmptyStateView("No Downloads", systemImage: "arrow.down.circle",
+                               description: Text("Favorite a song, album, or artist and it downloads here automatically for offline listening."))
+            } else {
+                Section {
+                    ForEach(ordered) { t in
+                        SongRow(track: t, showArtwork: true) {
+                            if let i = ready.firstIndex(where: { $0.id == t.id }) { audio.play(tracks: ready, startAt: i) }
+                        }
+                        .opacity(downloads.state(of: t.id) == .downloaded ? 1 : 0.55)
+                    }
+                } header: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(summaryText).font(.subheadline)
+                        if !downloads.failedIDs.isEmpty {
+                            Button("Retry \(downloads.failedIDs.count) failed") { model.retryFailedDownloads() }
+                                .buttonStyle(.bordered).controlSize(.small)
+                        }
+                    }
+                    .textCase(nil)
+                    .padding(.bottom, 4)
+                }
+            }
+        }
+        .navigationTitle("Downloads")
+        .navBar(hidden: false)
+        .toolbar {
+            if !ready.isEmpty {
+                Button { audio.play(tracks: ready, startAt: 0) } label: { Image(systemName: "play.fill") }
+                Button { audio.play(tracks: ready.shuffled(), startAt: 0) } label: { Image(systemName: "shuffle") }
+            }
+        }
+        .task(id: downloads.targetIDs) { load() }
+    }
+
+    private var summaryText: String {
+        let total = downloads.targetIDs.count
+        let done = downloads.downloadedIDs.intersection(downloads.targetIDs).count
+        var parts = [done == total ? "All \(total) songs available offline" : "\(done) of \(total) available offline"]
+        let bytes = DownloadStore.shared.totalSize()
+        if bytes > 0 { parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) }
+        if downloads.pausedOffline { parts.append("Paused — waiting for network") }
+        else if !downloads.downloadingIDs.isEmpty { parts.append("Downloading…") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Not-yet-downloaded first (downloading, failed, queued), then downloaded, each in
+    /// favorites order.
+    private var orderedTracks: [PlayableTrack] {
+        let rank: (Int64) -> Int = { id in
+            switch downloads.state(of: id) {
+            case .downloading: return 0
+            case .failed: return 1
+            case .queued: return 2
+            default: return 3
+            }
+        }
+        return downloads.targetIDs.enumerated()
+            .compactMap { i, id in tracksByID[id].map { (i, rank(id), $0) } }
+            .sorted { ($0.1, $0.0) < ($1.1, $1.0) }
+            .map { $0.2 }
+    }
+
+    private func load() {
+        guard let c = model.catalog else { return }
+        let tracks = c.makePlayable(songs: downloads.targetIDs.compactMap { c.song(id: $0) })
+        tracksByID = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     }
 }
 
