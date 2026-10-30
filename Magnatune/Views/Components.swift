@@ -342,11 +342,28 @@ struct AddToPlaylistButton: View {
         }
         .buttonStyle(.borderless)
         .help(onPlaylist ? "Remove from playlist" : "Add to playlist")
-        // Overlay, not `.sheet`: a sheet presented from this deep-in-navigation control does
-        // not dismiss on Mac Catalyst when its binding flips. See InfoOverlay.
-        .overlay {
-            if show { AddToPlaylistSheet(onClose: { show = false }, songIDs: ids) }
+        .modifier(AddToPlaylistPresenter(show: $show, songIDs: ids))
+    }
+}
+
+/// Presents `AddToPlaylistSheet` for `AddToPlaylistButton`.
+/// Mac Catalyst: an overlay, not `.sheet` — a sheet presented from this deep-in-navigation
+/// control does not dismiss there when its binding flips (see InfoOverlay).
+/// iPhone/iPad: a real sheet. An overlay is sized to the 21×18 pt button, so on a phone
+/// the panel was squeezed into a small grey box next to the button.
+private struct AddToPlaylistPresenter: ViewModifier {
+    @Binding var show: Bool
+    let songIDs: [Int64]
+    func body(content: Content) -> some View {
+        #if targetEnvironment(macCatalyst)
+        content.overlay {
+            if show { AddToPlaylistSheet(onClose: { show = false }, songIDs: songIDs) }
         }
+        #else
+        content.sheet(isPresented: $show) {
+            AddToPlaylistSheet(onClose: { show = false }, songIDs: songIDs, inSheet: true)
+        }
+        #endif
     }
 }
 
@@ -422,11 +439,21 @@ struct AddToPlaylistSheet: View {
     /// unlike @Environment(\.dismiss)).
     var onClose: () -> Void
     let songIDs: [Int64]
+    /// Presented with `.sheet` (iOS): show the card alone, without the dimmed backdrop.
+    var inSheet = false
     @State private var newName = ""
     @State private var rows: [UserStore.PlaylistRow] = []
     @FocusState private var nameFocused: Bool
 
     var body: some View {
+        if inSheet {
+            card
+        } else {
+            overlayCard
+        }
+    }
+
+    private var overlayCard: some View {
         ZStack {
             Color.black.opacity(0.22).ignoresSafeArea().onTapGesture { onClose() }
             card
