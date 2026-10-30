@@ -313,6 +313,12 @@ with `afconvert -f caff -d opus in.wav out.caf`; a real Ogg‑Opus with
   Developer ID") → `gh release create` with the DMG + a `ditto`-zipped .app → copy the DMG into
   `~/navim4/downloads/` and bump the `app/index.html` `?v=`. ⚠️ navim4 is pushed but **prod
   needs a `git pull`** to serve the new DMG/settings (no ssh to prod from this Mac).
+  🔴 Never name the zipped Mac app `magnatune-app-installer.zip`: that file name is the **SideStep
+  iPhone/iPad installer** (~0.5 MB, "magnatune-app installer (1Odp2q).app"), which magnatune.com
+  and the SideStep websites download from `releases/latest/download/`. Carry it forward to each new
+  release unchanged (download it from the previous release, re-upload). It was overwritten with the
+  10 MB Mac app from v1.1.1 until 2026-10-30; the correct one is built by
+  `~/altstore-fork/AltSign-SS/make-magnatune-release.sh` (from the notarized SideStep Wizard).
 - **Release recipe (unsigned iOS IPA for sideloading):** bump versions → `xcodegen generate` →
   `xcodebuild -project Magnatune.xcodeproj -scheme Magnatune -configuration Release -destination
   'generic/platform=iOS' -derivedDataPath build-ios-unsigned CODE_SIGNING_ALLOWED=NO
