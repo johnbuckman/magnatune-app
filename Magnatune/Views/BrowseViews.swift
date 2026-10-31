@@ -121,6 +121,7 @@ struct PopularView: View {
         }
         .navigationTitle("Popular")
         .task { load() }
+        .onChange(of: model.catalogGeneration) { _ in sections = []; load() }
     }
 
     private func load() {

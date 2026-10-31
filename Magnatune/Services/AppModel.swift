@@ -8,6 +8,10 @@ import Kingfisher
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var catalog: CatalogStore?
+    /// Bumped every time a catalog is (re)opened. Album/artist ids are NOT stable across
+    /// catalogs (the downloaded one renumbers the bundled seed's rows), so views that cache
+    /// catalog rows reload when this changes.
+    @Published private(set) var catalogGeneration = 0
     let userStore: UserStore
     let credentials: Credentials
     let cloudSync: CloudSync
@@ -475,6 +479,7 @@ final class AppModel: ObservableObject {
     private func openCatalog() {
         catalog = try? CatalogStore(path: CatalogSync.catalogPath())
         catalogReady = (catalog != nil)
+        catalogGeneration += 1
         // Rebuild genre-membership maps from the freshly-opened catalog so the browse-screen
         // genre filters stay correct after a background refresh / hot-swap.
         genresByArtist = catalog?.genresByArtist() ?? [:]

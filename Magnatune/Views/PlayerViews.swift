@@ -113,7 +113,11 @@ struct MiniPlayer: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.isPhoneLayout) private var isPhone
     @State private var showVolumePopover = false
+    @State private var width: CGFloat = 1000
     var onExpand: () -> Void
+    /// Phone-style controls (volume button, icon-only AirPlay, narrow transport buttons) on a
+    /// phone, or wherever the player is too narrow for the full set to fit on one line.
+    private var compactControls: Bool { isPhone || width < 700 }
 
     /// The peer we're controlling, if local audio is idle and a peer is active.
     private var remote: Peer? { model.remoteFocus }
@@ -150,8 +154,8 @@ struct MiniPlayer: View {
                 .contentShape(Rectangle())
                 .onTapGesture { if hasTrack { onExpand() } }
 
-                if !isPhone && remote == nil { volumeControl }
-                if isPhone && remote == nil { volumeButton }
+                if !compactControls && remote == nil { volumeControl }
+                if compactControls && remote == nil { volumeButton }
                 if remote == nil { airplayPill }
                 // Repeat + shuffle toggles, left of the transport — matches the web player.
                 if remote == nil {
@@ -166,6 +170,10 @@ struct MiniPlayer: View {
             progressRow
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(GeometryReader { g in
+            Color.clear.onAppear { width = g.size.width }
+                .onChange(of: g.size.width) { width = $0 }
+        })
         .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.375), radius: 1.5, x: 0, y: 1)
@@ -275,7 +283,7 @@ struct MiniPlayer: View {
     }
 
     @ViewBuilder private var airplayPill: some View {
-        if isPhone {
+        if compactControls {
             // iPhone: just the AirPlay icon (no route text / pill).
             Image(systemName: "airplayaudio")
                 .font(.subheadline)
@@ -304,7 +312,7 @@ struct MiniPlayer: View {
         Button(action: action) {
             Image(systemName: system)
                 .font(.subheadline)
-                .frame(width: isPhone ? 26 : 52, height: 28)   // iPhone: half width
+                .frame(width: compactControls ? 26 : 52, height: 28)   // iPhone / narrow: half width
                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.accentColor, lineWidth: 1))
                 .contentShape(Rectangle())
         }

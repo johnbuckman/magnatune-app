@@ -75,10 +75,12 @@ struct RootView: View {
             // and a >700 width in landscape, which would otherwise drop them into the
             // iPad/Mac layout, whose wide player controls run off the right edge on a phone.
             // (Mac Catalyst reports .regular, so there the width check drives the compact
-            // preview window; 700 rather than 600 because the regular layout's player
-            // controls start to overflow around ~640pt.)
+            // preview window.) 800, not 700: an iPad mini in portrait is 744pt, and next to
+            // the 168pt sidebar that left the album pages and player too little room — they
+            // ran off the right edge. MiniPlayer and AlbumDetailView also tighten up by
+            // their own width, for windows just above this.
             let compact = UIDevice.current.userInterfaceIdiom == .phone
-                || hSizeClass == .compact || geo.size.width < 700
+                || hSizeClass == .compact || geo.size.width < 800
             Group {
                 if compact { compactLayout } else { regularLayout }
             }

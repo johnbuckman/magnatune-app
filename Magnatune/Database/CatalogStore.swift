@@ -52,6 +52,13 @@ final class CatalogStore {
         read { try Artist.fetchOne($0, key: id) } ?? nil
     }
 
+    /// The same artist in THIS catalog, found by name: ids change between catalogs, so an
+    /// Artist cached (or restored from a saved navigation path) from an older one may point
+    /// at someone else.
+    func current(_ artist: Artist) -> Artist {
+        (read { try Artist.filter(sql: "name = ?", arguments: [artist.name]).fetchOne($0) } ?? nil) ?? artist
+    }
+
     /// All artist id -> name (cheap; ~700 rows). Useful for album grids.
     func artistNames() -> [Int64: String] {
         let pairs = read { db -> [(Int64, String)] in
@@ -74,6 +81,11 @@ final class CatalogStore {
 
     func album(id: Int64) -> Album? {
         read { try Album.fetchOne($0, key: id) } ?? nil
+    }
+
+    /// The same album in THIS catalog, found by its sku (stable across catalogs; ids aren't).
+    func current(_ album: Album) -> Album {
+        (read { try Album.filter(sql: "sku = ?", arguments: [album.sku]).fetchOne($0) } ?? nil) ?? album
     }
 
     func albums(forArtist artistId: Int64) -> [Album] {

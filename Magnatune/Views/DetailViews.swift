@@ -5,7 +5,11 @@ struct ArtistDetailView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var audio: AudioPlayer
     @Environment(\.isPhoneLayout) private var isPhone
-    let artist: Artist
+    private let passedArtist: Artist
+    @State private var resolvedArtist: Artist?
+    /// The artist as it is in the current catalog (see `CatalogStore.current`).
+    private var artist: Artist { resolvedArtist ?? passedArtist }
+    init(artist: Artist) { passedArtist = artist }
     @State private var albums: [Album] = []
     @State private var tracks: [PlayableTrack] = []
     @State private var recommended: [Artist] = []
@@ -99,16 +103,20 @@ struct ArtistDetailView: View {
                     ?? URLBuilder.artistPhotoURL(artist),
                 placeholderURL: albums.first.flatMap { URLBuilder.artistPhotoURL(artistName: artist.name, albumName: $0.name, size: 200) })
         }
-        .task {
-            albums = model.catalog?.albums(forArtist: artist.id) ?? []
-            if let c = model.catalog {
-                tracks = c.makePlayable(songs: c.songs(forArtist: artist.id))
-                recommended = c.recommendedArtists(forArtist: artist.id)
-                let gt = c.genresAndTags(forArtist: artist.id)
-                genres = gt.genres
-                tags = gt.tags
-            }
-        }
+        .task { load() }
+        .onChange(of: model.catalogGeneration) { _ in load() }
+    }
+
+    private func load() {
+        guard let c = model.catalog else { return }
+        let a = c.current(passedArtist)
+        resolvedArtist = a
+        albums = c.albums(forArtist: a.id)
+        tracks = c.makePlayable(songs: c.songs(forArtist: a.id))
+        recommended = c.recommendedArtists(forArtist: a.id)
+        let gt = c.genresAndTags(forArtist: a.id)
+        genres = gt.genres
+        tags = gt.tags
     }
 }
 
@@ -116,9 +124,16 @@ struct AlbumDetailView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var audio: AudioPlayer
     @Environment(\.isPhoneLayout) private var isPhone
-    let album: Album
+    private let passedAlbum: Album
+    @State private var resolvedAlbum: Album?
+    /// The album as it is in the current catalog (see `CatalogStore.current`).
+    private var album: Album { resolvedAlbum ?? passedAlbum }
     /// When set (arriving from a search result), scroll to this song and briefly highlight it.
     var highlightSongID: Int64? = nil
+    init(album: Album, highlightSongID: Int64? = nil) {
+        passedAlbum = album
+        self.highlightSongID = highlightSongID
+    }
     @State private var tracks: [PlayableTrack] = []
     @State private var artist: Artist?
     @State private var artistName: String = ""
@@ -128,6 +143,10 @@ struct AlbumDetailView: View {
     @State private var recommendedNames: [Int64: String] = [:]
     @State private var showCover = false
     @State private var highlightedID: Int64?
+    @State private var width: CGFloat = 1000
+    /// Buttons on their own line under the cover: always on a phone, and in any column too
+    /// narrow for them beside it (they'd widen the page past the screen edges).
+    private var stackButtons: Bool { isPhone || width < 760 }
 
     var body: some View {
         let shown = model.visibleTracks(tracks)
@@ -153,24 +172,13 @@ struct AlbumDetailView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         DownloadSummaryLabel(songIDs: tracks.map { $0.song.id })
-                        HStack {
-                            let nowPlaying = audio.isPlaying && audio.current?.album.id == album.id
-                            Button {
-                                audio.play(tracks: shown, startAt: 0)
-                            } label: {
-                                if isPhone { Image(systemName: nowPlaying ? "speaker.wave.2.fill" : "play.fill") }
-                                else { Label(nowPlaying ? "Now Playing" : "Play", systemImage: nowPlaying ? "speaker.wave.2.fill" : "play.fill").frame(minWidth: 120) }
-                            }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(shown.isEmpty)
-                            FavoriteButton(kind: "album", id: album.id)
-                            AlbumDownloadButton(sku: album.sku)
-                            AlbumBuyButton(sku: album.sku, compact: isPhone)
-                            AddToPlaylistButton { shown.map { $0.song.id } }
-                        }
+                        if !stackButtons { actionButtons(shown) }
                     }
-                    Spacer()
+                    Spacer(minLength: 0)
                 }
+                // On a phone (or a narrow column) the buttons don't fit beside the cover: the row
+                // made the page wider than the screen, so it was centred off both edges.
+                if stackButtons { actionButtons(shown) }
                 VStack(alignment: .leading, spacing: 6) {
                     if let desc = album.description, !desc.isEmpty {
                         ExpandableText(text: desc)
@@ -212,6 +220,10 @@ struct AlbumDetailView: View {
             }
             .padding()
         }
+        .background(GeometryReader { g in
+            Color.clear.onAppear { width = g.size.width }
+                .onChange(of: g.size.width) { width = $0 }
+        })
         .navigationTitle(album.name)
         .navigationBarTitleDisplayMode(.inline)
         .navBar(hidden: false)
@@ -231,18 +243,39 @@ struct AlbumDetailView: View {
             try? await Task.sleep(nanoseconds: 2_200_000_000)
             withAnimation { highlightedID = nil }
         }
+        .onChange(of: model.catalogGeneration) { _ in load() }
+        }
+    }
+
+    @ViewBuilder private func actionButtons(_ shown: [PlayableTrack]) -> some View {
+        HStack {
+            let nowPlaying = audio.isPlaying && audio.current?.album.id == album.id
+            Button {
+                audio.play(tracks: shown, startAt: 0)
+            } label: {
+                if isPhone { Image(systemName: nowPlaying ? "speaker.wave.2.fill" : "play.fill") }
+                else { Label(nowPlaying ? "Now Playing" : "Play", systemImage: nowPlaying ? "speaker.wave.2.fill" : "play.fill").frame(minWidth: 120) }
+            }
+                .buttonStyle(.borderedProminent)
+                .disabled(shown.isEmpty)
+            FavoriteButton(kind: "album", id: album.id)
+            AlbumDownloadButton(sku: album.sku)
+            AlbumBuyButton(sku: album.sku, compact: isPhone)
+            AddToPlaylistButton { shown.map { $0.song.id } }
         }
     }
 
     private func load() {
         guard let c = model.catalog else { return }
-        artist = c.artist(id: album.artistId)
+        let al = c.current(passedAlbum)
+        resolvedAlbum = al
+        artist = c.artist(id: al.artistId)
         artistName = artist?.name ?? ""
-        tracks = c.makePlayable(songs: c.songs(forAlbum: album.id))
-        let gt = c.genresAndTags(forAlbum: album.id)
+        tracks = c.makePlayable(songs: c.songs(forAlbum: al.id))
+        let gt = c.genresAndTags(forAlbum: al.id)
         genres = gt.genres
         tags = gt.tags
-        recommended = c.recommendedAlbums(forAlbum: album.id)
+        recommended = c.recommendedAlbums(forAlbum: al.id)
         recommendedNames = c.artistNames()
     }
 }
