@@ -44,6 +44,57 @@ final class AudioPlayer: ObservableObject {
         }
     }
 
+    /// This device's own channel setting (Settings → Speaker channel), persisted. Lets one
+    /// iPad be tested as "left only" without a partner.
+    @Published var soloChannelMode: ChannelMode = ChannelMode(rawValue: UserDefaults.standard.string(forKey: ChannelMode.defaultsKey) ?? "") ?? .normal {
+        didSet {
+            UserDefaults.standard.set(soloChannelMode.rawValue, forKey: ChannelMode.defaultsKey)
+            applyChannelModeToCurrentItems()
+        }
+    }
+    /// Set by StereoPair while paired; overrides the solo setting.
+    var pairChannelOverride: ChannelMode? { didSet { applyChannelModeToCurrentItems() } }
+    var channelMode: ChannelMode { pairChannelOverride ?? soloChannelMode }
+
+    // MARK: Stereo pair (synchronized playback across two devices)
+
+    /// One shared playback timeline: `position` (seconds into song `songIDs[index]`) is heard
+    /// from the speaker at host-clock time `hostTime` (seconds, this device's clock). Both
+    /// paired devices hold the same anchor (converted to their own clocks) and schedule
+    /// against it, so they play in lock step.
+    struct StereoSyncState {
+        var songIDs: [Int64]
+        var index: Int
+        var position: Double
+        var hostTime: Double
+        var playing: Bool
+    }
+
+    /// True while paired. Disables crossfade and routes every transport action through a
+    /// shared anchor that is sent to the partner via `onStereoSyncOut`.
+    @Published private(set) var stereoPaired = false
+    /// Whether this device advances the queue at the end of a track (the other one waits for
+    /// the leader's sync so both switch tracks at the same instant).
+    var stereoIsLeader = false
+    /// Outbound anchor for the partner (host time is in THIS device's clock).
+    var onStereoSyncOut: ((StereoSyncState) -> Void)?
+    /// Last measured timeline error (ms, + = this device is ahead), for the Settings readout.
+    @Published private(set) var stereoDriftMs: Double = 0
+    private var stereoAnchor: StereoSyncState?
+    private var loadedSongID: Int64?
+    private var anchorGeneration = 0
+    private var driftTickCount = 0
+    /// Host time the current scheduled start takes effect; drift checks wait until after it.
+    private var stereoStartHost: Double = .infinity
+    /// How far ahead a synced start is scheduled, leaving time for the partner to receive
+    /// the message, load and preroll.
+    private let stereoLead: Double = 1.0
+
+    /// Host-clock seconds — the clock `AVPlayer.setRate(_:time:atHostTime:)` schedules on.
+    nonisolated static func hostNow() -> Double {
+        CMClockGetTime(CMClockGetHostTimeClock()).seconds
+    }
+
     var current: PlayableTrack? { queue.indices.contains(index) ? queue[index] : nil }
 
     /// Called whenever the playback state or current track changes, so the peer
@@ -132,12 +183,18 @@ final class AudioPlayer: ObservableObject {
         }
         queue = ordered
         index = start
+        if stereoPaired { stereoStart(index: start, position: 0, playing: true); return }
         loadCurrent(autoPlay: true)
     }
 
     func playSingle(_ track: PlayableTrack) { play(tracks: [track], startAt: 0) }
 
     func toggle() {
+        if stereoPaired {
+            let t = active.currentTime().seconds
+            stereoStart(index: index, position: t.isFinite ? t : currentTime, playing: !isPlaying)
+            return
+        }
         if isPlaying { active.pause(); if crossfading { inactive.pause() }; isPlaying = false }
         else { active.play(); if crossfading { inactive.play() }; isPlaying = true }
         updateNowPlaying()
@@ -145,6 +202,12 @@ final class AudioPlayer: ObservableObject {
 
     func next() {
         cancelCrossfade()
+        if stereoPaired {
+            if hasNext { stereoStart(index: index + 1, position: 0, playing: true) }
+            else if repeatEnabled, !queue.isEmpty { stereoStart(index: 0, position: 0, playing: true) }
+            else { stereoStart(index: index, position: currentTime, playing: false) }
+            return
+        }
         guard hasNext else {
             // End of queue: loop it forever when repeat is on (tracks replay from AudioCache,
             // so no network is used after the first pass); otherwise stop.
@@ -164,6 +227,7 @@ final class AudioPlayer: ObservableObject {
     func jump(to newIndex: Int) {
         guard queue.indices.contains(newIndex) else { return }
         cancelCrossfade()
+        if stereoPaired { stereoStart(index: newIndex, position: 0, playing: true); return }
         index = newIndex
         loadCurrent(autoPlay: true)
     }
@@ -172,12 +236,14 @@ final class AudioPlayer: ObservableObject {
         cancelCrossfade()
         if currentTime > 3 { seek(to: 0); return }
         guard index > 0 else { seek(to: 0); return }
+        if stereoPaired { stereoStart(index: index - 1, position: 0, playing: true); return }
         index -= 1
         loadCurrent(autoPlay: true)
     }
 
     func seek(to seconds: Double) {
         cancelCrossfade()
+        if stereoPaired { stereoStart(index: index, position: seconds, playing: isPlaying); return }
         active.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
         currentTime = seconds
         updateNowPlaying()
@@ -223,13 +289,27 @@ final class AudioPlayer: ObservableObject {
             // The user may have skipped while we were resolving/probing — ignore stale loads.
             guard self.current?.song.id == track.song.id, !self.crossfading else { return }
             let item = AVPlayerItem(asset: prepared.asset)
+            let mix = await ChannelTap.audioMix(for: prepared.asset, mode: self.channelMode)
+            guard self.current?.song.id == track.song.id, !self.crossfading else { return }
+            item.audioMix = mix
+            if self.stereoPaired {
+                // Varispeed keeps drift-correction rate nudges glitch-free; scheduling with
+                // setRate(_:time:atHostTime:) requires waitsToMinimizeStalling = false.
+                item.audioTimePitchAlgorithm = .varispeed
+                self.active.automaticallyWaitsToMinimizeStalling = false
+            } else {
+                self.active.automaticallyWaitsToMinimizeStalling = true
+            }
             self.active.volume = self.volume
             self.active.replaceCurrentItem(with: item)
+            self.loadedSongID = track.song.id
             self.currentFormat = prepared.format
             self.observe(item: item, for: track)
             self.duration = TimeInterval(track.song.duration ?? 0)
             self.currentTime = 0
-            if autoPlay { self.active.play(); self.isPlaying = true }
+            if self.stereoPaired {
+                self.scheduleAnchor()
+            } else if autoPlay { self.active.play(); self.isPlaying = true }
             self.userStore?.recordPlay(songID: track.song.id)
             self.updateNowPlaying()
             self.prefetchNext()
@@ -269,6 +349,8 @@ final class AudioPlayer: ObservableObject {
             guard self.crossfadePrepared, !self.crossfading, self.index == startIndex, self.hasNext,
                   self.queue[self.index + 1].song.id == nextTrack.song.id else { return }
             let item = AVPlayerItem(asset: prepared.asset)
+            item.audioMix = await ChannelTap.audioMix(for: prepared.asset, mode: self.channelMode)
+            guard self.crossfadePrepared, !self.crossfading, self.index == startIndex else { return }
             self.inactive.volume = 0
             self.inactive.replaceCurrentItem(with: item)
             self.inactive.seek(to: .zero, completionHandler: { _ in })
@@ -368,6 +450,11 @@ final class AudioPlayer: ObservableObject {
         if t.isFinite { currentTime = t }
         if let d = active.currentItem?.duration.seconds, d.isFinite, d > 0 { duration = d }
 
+        if stereoPaired {
+            driftTickCount += 1
+            if driftTickCount % 4 == 0 { correctStereoDrift() }   // once a second
+            return                                                // no crossfade while paired
+        }
         guard isPlaying, crossfadeEnabled, hasNext, duration > crossfadeDuration + 1 else { return }
         let remaining = duration - currentTime
         guard remaining > 0 else { return }
@@ -421,7 +508,175 @@ final class AudioPlayer: ObservableObject {
     private func handleItemEnd() {
         // If a crossfade is running, advancing is handled by the fade.
         guard !crossfading else { return }
+        if stereoPaired {
+            // Only the leader advances; the follower waits for its sync so both switch tracks
+            // together. (Both reach the end at the same moment anyway.)
+            if stereoIsLeader { next() } else { isPlaying = false }
+            return
+        }
         next()
+    }
+
+    // MARK: Stereo pair engine
+
+    /// Enter / leave paired mode. Leaving keeps playing locally from the current position.
+    func setStereoPaired(_ on: Bool) {
+        guard on != stereoPaired else { return }
+        anchorGeneration += 1
+        stereoPaired = on
+        stereoAnchor = nil
+        stereoDriftMs = 0
+        if on {
+            cancelCrossfade()
+            active.automaticallyWaitsToMinimizeStalling = false
+            active.currentItem?.audioTimePitchAlgorithm = .varispeed
+        } else {
+            active.automaticallyWaitsToMinimizeStalling = true
+            if isPlaying { active.rate = 1 }
+        }
+    }
+
+    /// The current state as an anchor `lead` seconds from now (used when pairing, so the
+    /// partner can join what this device is already playing).
+    func currentStereoState(lead: Double? = nil) -> StereoSyncState? {
+        guard current != nil else { return nil }
+        let l = lead ?? stereoLead
+        let pos = isPlaying ? currentTime + l : currentTime
+        return StereoSyncState(songIDs: queue.map { $0.song.id }, index: index,
+                               position: pos, hostTime: Self.hostNow() + l, playing: isPlaying)
+    }
+
+    /// A local transport action while paired: build an anchor `stereoLead` ahead, apply it
+    /// here and send it to the partner.
+    private func stereoStart(index newIndex: Int, position: Double, playing: Bool) {
+        guard queue.indices.contains(newIndex) else { return }
+        let state = StereoSyncState(songIDs: queue.map { $0.song.id }, index: newIndex,
+                                    position: max(0, position),
+                                    hostTime: Self.hostNow() + (playing ? stereoLead : 0),
+                                    playing: playing)
+        applyStereoSync(state, tracks: queue)
+        onStereoSyncOut?(state)
+    }
+
+    /// Adopt a shared anchor (from the partner, with host time already converted to this
+    /// device's clock, or from a local action). `tracks` must match `state.songIDs`.
+    func applyStereoSync(_ state: StereoSyncState, tracks: [PlayableTrack]) {
+        guard stereoPaired, tracks.indices.contains(state.index) else { return }
+        cancelCrossfade()
+        if tracks.map({ $0.song.id }) != queue.map({ $0.song.id }) { queue = tracks }
+        stereoAnchor = state
+        anchorGeneration += 1
+        isPlaying = state.playing
+        let targetSong = tracks[state.index].song.id
+        if index != state.index || loadedSongID != targetSong || active.currentItem == nil {
+            index = state.index
+            loadCurrent(autoPlay: false)            // calls scheduleAnchor() once loaded
+        } else {
+            scheduleAnchor()
+        }
+        updateNowPlaying()
+    }
+
+    /// The partner-clock → local-clock conversion improved: shift the anchor's host time.
+    /// No reschedule; the once-a-second drift correction absorbs the change smoothly.
+    func retimeStereoAnchor(hostTime: Double) {
+        guard stereoPaired, stereoAnchor != nil else { return }
+        stereoAnchor?.hostTime = hostTime
+    }
+
+    /// Make the active player follow `stereoAnchor`: pause at the anchor position, or seek +
+    /// preroll and start at the exact host time that puts the anchor position at the speaker
+    /// at the anchor's moment (compensating this device's output latency).
+    private func scheduleAnchor(attempt: Int = 0) {
+        guard stereoPaired, let a = stereoAnchor, let item = active.currentItem else { return }
+        let gen = anchorGeneration
+        stereoStartHost = .infinity
+        if !a.playing {
+            active.pause()
+            active.seek(to: CMTime(seconds: a.position, preferredTimescale: 48000),
+                        toleranceBefore: .zero, toleranceAfter: .zero)
+            currentTime = a.position
+            isPlaying = false
+            updateNowPlaying()
+            return
+        }
+        guard item.status == .readyToPlay else {
+            // Not loaded yet: retry shortly (the anchor is in the future, or we join late).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self, self.anchorGeneration == gen else { return }
+                self.scheduleAnchor(attempt: attempt)
+            }
+            return
+        }
+        let latency = AVAudioSession.sharedInstance().outputLatency
+        let minLead = 0.25 * Double(attempt + 1)     // time for seek + preroll
+        let target = max(a.hostTime, Self.hostNow() + minLead)   // speaker time
+        let itemTime = a.position + (target - a.hostTime)
+        active.pause()
+        active.cancelPendingPrerolls()
+        active.seek(to: CMTime(seconds: itemTime, preferredTimescale: 48000),
+                    toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.anchorGeneration == gen else { return }
+                self.active.preroll(atRate: 1) { _ in
+                    Task { @MainActor in
+                        guard self.anchorGeneration == gen else { return }
+                        let startHost = target - latency
+                        if startHost < Self.hostNow() + 0.01 {
+                            // Seek/preroll took too long: try again with more lead.
+                            if attempt < 4 { self.scheduleAnchor(attempt: attempt + 1) }
+                            else { self.stereoStartHost = Self.hostNow(); self.active.play() }
+                            return
+                        }
+                        self.stereoStartHost = startHost
+                        self.active.setRate(1, time: .invalid,
+                                            atHostTime: CMTime(seconds: startHost, preferredTimescale: 1_000_000_000))
+                        self.isPlaying = true
+                        self.currentTime = itemTime
+                        self.updateNowPlaying()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Once a second: compare where the player actually is with where the anchor says it
+    /// should be. Small error → nudge the rate (±1% max, corrects ~10 ms/s); large error →
+    /// reschedule from the anchor (an audible blip, but rare).
+    private func correctStereoDrift() {
+        guard let a = stereoAnchor, a.playing, isPlaying, active.rate != 0,
+              let item = active.currentItem, item.status == .readyToPlay,
+              index == a.index, loadedSongID == a.songIDs[a.index] else { return }
+        let now = Self.hostNow()
+        guard now > stereoStartHost + 0.5 else { return }   // let the scheduled start settle
+        let actual = active.currentTime().seconds
+        guard actual.isFinite else { return }
+        let latency = AVAudioSession.sharedInstance().outputLatency
+        let expected = a.position + (now + latency - a.hostTime)
+        let err = actual - expected                 // + = ahead of the shared timeline
+        stereoDriftMs = err * 1000
+        if abs(err) > 0.1 {
+            stereoAnchor = a
+            anchorGeneration += 1
+            scheduleAnchor()
+        } else if abs(err) > 0.003 {
+            active.rate = Float(1 - max(-0.01, min(0.01, err)))
+        } else if active.rate != 1 {
+            active.rate = 1
+        }
+    }
+
+    /// Re-apply the channel mode to the item(s) already loaded (Settings change or pairing).
+    private func applyChannelModeToCurrentItems() {
+        let mode = channelMode
+        for p in players {
+            guard let item = p.currentItem else { continue }
+            Task { @MainActor in
+                let mix = await ChannelTap.audioMix(for: item.asset, mode: mode)
+                guard p.currentItem === item, self.channelMode == mode else { return }
+                item.audioMix = mix
+            }
+        }
     }
 
     // MARK: Now Playing + remote commands
@@ -465,6 +720,10 @@ final class AudioPlayer: ObservableObject {
         }
     }
 
-    private func resume() { active.play(); if crossfading { inactive.play() }; isPlaying = true; updateNowPlaying() }
-    private func pause() { active.pause(); if crossfading { inactive.pause() }; isPlaying = false; updateNowPlaying() }
+    private func resume() {
+        if stereoPaired { if !isPlaying { toggle() }; return }
+        active.play(); if crossfading { inactive.play() }; isPlaying = true; updateNowPlaying() }
+    private func pause() {
+        if stereoPaired { if isPlaying { toggle() }; return }
+        active.pause(); if crossfading { inactive.pause() }; isPlaying = false; updateNowPlaying() }
 }

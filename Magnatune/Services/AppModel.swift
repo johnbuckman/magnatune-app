@@ -17,6 +17,10 @@ final class AppModel: ObservableObject {
     let cloudSync: CloudSync
     let audio: AudioPlayer
     let peerService: PeerService
+    /// Two devices as the left + right speakers of one stereo pair (rides on peerService).
+    private(set) lazy var stereoPair = StereoPair(peers: peerService, audio: audio) { [weak self] ids in
+        ids.compactMap { self?.playableTrack(songID: $0) }
+    }
     private let sync = CatalogSync()
 
     @Published var catalogReady = false
@@ -207,6 +211,7 @@ final class AppModel: ObservableObject {
     // MARK: Local-network peer sync
 
     private func setupPeerSync() {
+        _ = stereoPair      // registers its PeerService / AudioPlayer hooks
         // Inbound transport commands drive our own player (we are being controlled).
         peerService.onControl = { [weak self] cmd in
             guard let self else { return }
@@ -432,7 +437,7 @@ final class AppModel: ObservableObject {
     /// more recently than us, pause ourselves. Both sides must have the setting on.
     private func applyAutoStop(_ peers: [Peer]) {
         guard autoStopOtherMusic, audio.isPlaying, let myStart = localPlayStartedAt else { return }
-        for p in peers where p.nowPlaying.state == .playing {
+        for p in peers where p.nowPlaying.state == .playing && p.id != stereoPair.partnerID {
             if let theirStart = p.nowPlaying.startedAt, theirStart > myStart.addingTimeInterval(0.5) {
                 audio.toggle()                 // pause — they started after us
                 localPlayStartedAt = nil

@@ -39,10 +39,25 @@ enum PeerMessage {
     case hello(id: String, name: String, platform: String)
     case nowPlaying(PeerNowPlaying)
     case control(PeerControl)
+    // Stereo pair (see StereoPair.swift). Peers that don't know these types drop the line
+    // (the decoder throws "unknown peer message type", and ingest skips it).
+    /// Clock probe: sender's host-clock seconds.
+    case ping(t0: Double)
+    /// Reply: the probe's t0 plus the replier's host time when the ping arrived.
+    case pong(t0: Double, t1: Double)
+    /// "Pair with me; I play `channel`" ("left"/"right"). Answered by `pairAck`.
+    case pair(channel: String)
+    case pairAck(accepted: Bool)
+    case unpair
+    /// Shared playback anchor; `at` is in the SENDER's host clock.
+    case stereoSync(songIDs: [Int64], index: Int, position: Double, at: Double, playing: Bool)
+    /// Ask the partner to send its current state as a stereoSync.
+    case syncRequest
 }
 
 extension PeerMessage: Codable {
-    private enum K: String, CodingKey { case t, id, name, platform, state, songID, position, startedAt, cmd }
+    private enum K: String, CodingKey { case t, id, name, platform, state, songID, position, startedAt, cmd
+        case t0, t1, channel, ok, songs, index, at, playing }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -62,6 +77,30 @@ extension PeerMessage: Codable {
         case let .control(cmd):
             try c.encode("ctl", forKey: .t)
             try c.encode(cmd.rawValue, forKey: .cmd)
+        case let .ping(t0):
+            try c.encode("ping", forKey: .t)
+            try c.encode(t0, forKey: .t0)
+        case let .pong(t0, t1):
+            try c.encode("pong", forKey: .t)
+            try c.encode(t0, forKey: .t0)
+            try c.encode(t1, forKey: .t1)
+        case let .pair(channel):
+            try c.encode("pair", forKey: .t)
+            try c.encode(channel, forKey: .channel)
+        case let .pairAck(ok):
+            try c.encode("pairAck", forKey: .t)
+            try c.encode(ok, forKey: .ok)
+        case .unpair:
+            try c.encode("unpair", forKey: .t)
+        case let .stereoSync(songs, index, position, at, playing):
+            try c.encode("ssync", forKey: .t)
+            try c.encode(songs, forKey: .songs)
+            try c.encode(index, forKey: .index)
+            try c.encode(position, forKey: .position)
+            try c.encode(at, forKey: .at)
+            try c.encode(playing, forKey: .playing)
+        case .syncRequest:
+            try c.encode("sreq", forKey: .t)
         }
     }
 
@@ -81,6 +120,24 @@ extension PeerMessage: Codable {
             self = .nowPlaying(PeerNowPlaying(state: state, songID: songID, position: position, startedAt: startedAt))
         case "ctl":
             self = .control(PeerControl(rawValue: try c.decode(String.self, forKey: .cmd)) ?? .playPause)
+        case "ping":
+            self = .ping(t0: try c.decode(Double.self, forKey: .t0))
+        case "pong":
+            self = .pong(t0: try c.decode(Double.self, forKey: .t0), t1: try c.decode(Double.self, forKey: .t1))
+        case "pair":
+            self = .pair(channel: try c.decode(String.self, forKey: .channel))
+        case "pairAck":
+            self = .pairAck(accepted: try c.decodeIfPresent(Bool.self, forKey: .ok) ?? false)
+        case "unpair":
+            self = .unpair
+        case "ssync":
+            self = .stereoSync(songIDs: try c.decode([Int64].self, forKey: .songs),
+                               index: try c.decode(Int.self, forKey: .index),
+                               position: try c.decode(Double.self, forKey: .position),
+                               at: try c.decode(Double.self, forKey: .at),
+                               playing: try c.decode(Bool.self, forKey: .playing))
+        case "sreq":
+            self = .syncRequest
         case let other:
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
                                                     debugDescription: "unknown peer message type \(other)"))
@@ -127,8 +184,13 @@ final class PeerService: ObservableObject {
 
     /// Invoked when a peer sends us a transport command (i.e. we are being controlled).
     var onControl: ((PeerControl) -> Void)?
+    /// Invoked for stereo-pair messages (ping/pong/pair/ssync…), with the host-clock time
+    /// the bytes arrived (stamped on the network queue, before the main-actor hop).
+    var onStereoMessage: ((_ peerID: String, _ msg: PeerMessage, _ arrivedAt: Double) -> Void)?
+    /// Invoked when a peer's connection goes away (so a stereo pair can end cleanly).
+    var onPeerGone: ((_ peerID: String) -> Void)?
 
-    private let instanceID = UUID().uuidString
+    let instanceID = UUID().uuidString
     /// Resolves the human-friendly device name. Evaluated LAZILY (see `deviceName`) because
     /// the current implementation reads `ProcessInfo.processInfo.hostName`, and *reading
     /// hostName resolves the device's `.local` name over mDNS, which trips the iOS Local
@@ -190,6 +252,14 @@ final class PeerService: ObservableObject {
         for l in links where l.remoteID != nil { send(msg, on: l) }
     }
 
+    /// Send any message to a specific peer. Returns false if it isn't connected.
+    @discardableResult
+    func send(peerID: String, _ msg: PeerMessage) -> Bool {
+        guard let link = links.first(where: { $0.remoteID == peerID }) else { return false }
+        send(msg, on: link)
+        return true
+    }
+
     /// Send a transport command to a specific peer.
     func sendControl(peerID: String, _ control: PeerControl) {
         guard let link = links.first(where: { $0.remoteID == peerID }) else { return }
@@ -212,8 +282,7 @@ final class PeerService: ObservableObject {
 
     private func startListener() {
         do {
-            let params = NWParameters.tcp
-            params.includePeerToPeer = true
+            let params = Self.tcpParams()
             let listener = try NWListener(using: params)
             let txtData: Data
             if #available(iOS 16.0, *) {
@@ -291,8 +360,13 @@ final class PeerService: ObservableObject {
         }
     }
 
-    private func makeParams() -> NWParameters {
-        let params = NWParameters.tcp
+    private func makeParams() -> NWParameters { Self.tcpParams() }
+
+    /// TCP with Nagle off, so the small stereo-pair clock probes go out immediately.
+    private static func tcpParams() -> NWParameters {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        let params = NWParameters(tls: nil, tcp: tcp)
         params.includePeerToPeer = true
         return params
     }
@@ -332,7 +406,8 @@ final class PeerService: ObservableObject {
     private func receive(on link: PeerLink) {
         link.connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             if let data, !data.isEmpty {
-                Task { @MainActor in self?.ingest(link, data) }
+                let arrived = AudioPlayer.hostNow()
+                Task { @MainActor in self?.ingest(link, data, arrivedAt: arrived) }
             }
             if isComplete || error != nil {
                 Task { @MainActor in self?.remove(link) }
@@ -344,23 +419,27 @@ final class PeerService: ObservableObject {
 
     private func remove(_ link: PeerLink) {
         link.connection.cancel()
+        let wasLinked = links.contains { $0 === link }
         links.removeAll { $0 === link }
+        if wasLinked, let id = link.remoteID, !links.contains(where: { $0.remoteID == id }) {
+            onPeerGone?(id)
+        }
         publishPeers()
     }
 
     // MARK: Message handling
 
-    private func ingest(_ link: PeerLink, _ data: Data) {
+    private func ingest(_ link: PeerLink, _ data: Data, arrivedAt: Double) {
         link.buffer.append(data)
         while let nl = link.buffer.firstIndex(of: 0x0A) {
             let line = Data(link.buffer[link.buffer.startIndex..<nl])
             link.buffer.removeSubrange(link.buffer.startIndex...nl)
             guard !line.isEmpty, let msg = try? JSONDecoder().decode(PeerMessage.self, from: line) else { continue }
-            handle(link, msg)
+            handle(link, msg, arrivedAt: arrivedAt)
         }
     }
 
-    private func handle(_ link: PeerLink, _ msg: PeerMessage) {
+    private func handle(_ link: PeerLink, _ msg: PeerMessage, arrivedAt: Double) {
         switch msg {
         case let .hello(id, name, _):
             // Drop a duplicate connection to a peer we already have (safety net).
@@ -381,6 +460,11 @@ final class PeerService: ObservableObject {
             publishPeers()
         case let .control(cmd):
             onControl?(cmd)
+        case let .ping(t0):
+            // Answer clock probes right here, stamped with the arrival time.
+            send(.pong(t0: t0, t1: arrivedAt), on: link)
+        case .pong, .pair, .pairAck, .unpair, .stereoSync, .syncRequest:
+            if let id = link.remoteID { onStereoMessage?(id, msg, arrivedAt) }
         }
     }
 

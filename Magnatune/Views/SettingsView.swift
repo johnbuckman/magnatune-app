@@ -218,6 +218,11 @@ struct SettingsView: View {
 
             groupDivider
 
+            StereoPairSection(pair: model.stereoPair, audio: model.audio, peers: model.peerService,
+                              sharingOn: model.peerSharingEnabled)
+
+            groupDivider
+
             Section {
                 Toggle("Hide things I dislike", isOn: Binding(
                     get: { model.hideDislikes },
@@ -618,3 +623,49 @@ let helpSections: [HelpSection] = [
         .text("Enjoy the music — and thanks for supporting independent artists."),
     ]),
 ]
+
+
+/// Settings → Stereo speakers: this device's channel, and pairing with another device on
+/// the local network so one plays left and the other right (see StereoPair.swift).
+struct StereoPairSection: View {
+    @ObservedObject var pair: StereoPair
+    @ObservedObject var audio: AudioPlayer
+    @ObservedObject var peers: PeerService
+    let sharingOn: Bool
+
+    var body: some View {
+        Section {
+            if let id = pair.partnerID {
+                let name = peers.peers.first(where: { $0.id == id })?.name ?? "other device"
+                LabeledRow("Paired with", value: name)
+                LabeledRow("This device plays", value: pair.myChannel == .left ? "Left" : "Right")
+                LabeledRow("Sync", value: pair.clockReady
+                           ? String(format: "%.1f ms off · link %.0f ms", audio.stereoDriftMs, pair.bestRTTms)
+                           : "Measuring…")
+                Button("Stop stereo pair", role: .destructive) { pair.unpair() }
+            } else {
+                Picker("Speaker channel", selection: $audio.soloChannelMode) {
+                    ForEach(ChannelMode.allCases) { Text($0.label).tag($0) }
+                }
+                if sharingOn {
+                    if peers.peers.isEmpty {
+                        Text("No other Magnatune devices found on this network.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(peers.peers) { p in
+                        Menu {
+                            Button("This device = Left, \(p.name) = Right") { pair.requestPair(with: p.id, channel: .left) }
+                            Button("This device = Right, \(p.name) = Left") { pair.requestPair(with: p.id, channel: .right) }
+                        } label: {
+                            Label("Stereo pair with \(p.name)", systemImage: "hifispeaker.2")
+                        }
+                    }
+                }
+            }
+        } header: { Text("Stereo speakers") } footer: {
+            Text(sharingOn
+                 ? "Put two devices side by side and pair them: one plays the left channel and the other the right, in sync. Both need this app open on the same Wi-Fi. Speaker channel lets this device play only one side on its own."
+                 : "Speaker channel lets this device play only the left or right side. Turn on Share & control on local network to pair two devices as left and right speakers.")
+        }
+    }
+}

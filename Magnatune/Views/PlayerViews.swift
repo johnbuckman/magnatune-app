@@ -400,6 +400,15 @@ struct NowPlayingView: View {
                                 .foregroundStyle(.tertiary)
                                 .padding(.top, 1)
                         }
+                        // Stereo pair / single-channel indicator.
+                        if remote == nil, audio.channelMode != .normal {
+                            Label(audio.stereoPaired
+                                  ? "Stereo pair · \(audio.channelMode == .left ? "Left" : "Right")"
+                                  : audio.channelMode.label,
+                                  systemImage: "hifispeaker.2")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     progressBar(track: track)
                     controls
