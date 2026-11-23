@@ -76,25 +76,36 @@ func remoteDisplayPosition(_ peer: Peer, duration: Double) -> Double {
 struct SeekBar: View {
     let current: Double
     let duration: Double
+    var touchHeight: CGFloat = 16
     let onSeek: (Double) -> Void
 
     @State private var dragFraction: Double? = nil
+
+    init(current: Double, duration: Double, touchHeight: CGFloat = 16, onSeek: @escaping (Double) -> Void) {
+        self.current = current; self.duration = duration; self.touchHeight = touchHeight; self.onSeek = onSeek
+    }
 
     var body: some View {
         GeometryReader { geo in
             let w = max(geo.size.width, 1)
             let frac = dragFraction ?? (duration > 0 ? min(1, max(0, current / duration)) : 0)
+            let dragging = dragFraction != nil
+            // Thumb and track grow while dragging, like the system players.
+            let thumb: CGFloat = touchHeight > 30 ? (dragging ? 26 : 16) : 13
+            let track: CGFloat = touchHeight > 30 && dragging ? 7 : 4
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.secondary.opacity(0.25)).frame(height: 4)
-                Capsule().fill(Color.accentColor).frame(width: w * frac, height: 4)
+                Capsule().fill(Color.secondary.opacity(0.25)).frame(height: track)
+                Capsule().fill(Color.accentColor).frame(width: w * frac, height: track)
                 Circle().fill(Color.accentColor)
-                    .frame(width: 13, height: 13)
+                    .frame(width: thumb, height: thumb)
                     .shadow(radius: 1)
-                    .offset(x: min(w - 6.5, max(6.5, w * frac)) - 6.5)
+                    .offset(x: min(w - thumb / 2, max(thumb / 2, w * frac)) - thumb / 2)
             }
             .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
+            .contentShape(Rectangle())        // the whole touchHeight-tall strip is grabbable
+            .animation(.easeOut(duration: 0.12), value: dragging)
+            // High priority so the sheet's swipe-down and the page swipe don't steal the drag.
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { v in dragFraction = min(1, max(0, v.location.x / w)) }
                     .onEnded { v in
@@ -104,7 +115,7 @@ struct SeekBar: View {
                     }
             )
         }
-        .frame(height: 16)
+        .frame(height: touchHeight)
     }
 }
 
@@ -350,7 +361,10 @@ struct NowPlayingView: View {
     /// the artist page. Both pass the current track's album (artist is resolved from it).
     var onOpenAlbum: (Album) -> Void = { _ in }
     var onOpenArtist: (Album) -> Void = { _ in }
-    @State private var showQueue = false
+    /// Swipe pages (dots at the bottom): 0 player · 1 current playlist · 2 artist · 3 album.
+    /// John, 2026-11-23 (to-do 10537188683): replaces the queue (top-left) and close
+    /// (top-right) icons; the grab handle and swipe-down still hide the sheet.
+    @State private var page = 0
 
     private var remote: Peer? { model.remoteFocus }
     private var displayTrack: PlayableTrack? {
@@ -360,97 +374,183 @@ struct NowPlayingView: View {
     private var isRemotePlaying: Bool { remote?.nowPlaying.state == .playing }
 
     var body: some View {
-        GeometryReader { geo in
-            // Size the artwork to the available height so the controls always fit
-            // (no bottom truncation) and the block stays vertically centered.
-            let side = max(120, min(geo.size.width - 64, geo.size.height * 0.46))
-            VStack(spacing: 16) {
-                // Tap the grab handle (or the close button) to hide the player — on Mac
-                // there's no swipe-to-dismiss.
-                Button { dismiss() } label: {
-                    Capsule().fill(.secondary).frame(width: 44, height: 5)
-                        .padding(.top, 10).padding(.bottom, 4).padding(.horizontal, 40)
-                        .contentShape(Rectangle())
+        VStack(spacing: 0) {
+            // Tap the grab handle to hide the player — on Mac there's no swipe-to-dismiss.
+            Button { dismiss() } label: {
+                Capsule().fill(.secondary).frame(width: 44, height: 5)
+                    .padding(.top, 10).padding(.bottom, 4).padding(.horizontal, 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Hide player")
+            if let remote { remoteBanner(remote) }
+            if let track = displayTrack {
+                TabView(selection: $page) {
+                    playerPage(track).tag(0)
+                    QueueView(inPlayer: true).tag(1)
+                    artistPage(track).tag(2)
+                    albumPage(track).tag(3)
                 }
-                .buttonStyle(.plain)
-                .help("Hide player")
-                if let remote { remoteBanner(remote) }
-                if let track = displayTrack {
-                    Spacer(minLength: 0)
-                    CoverImage(artistName: track.artistName, albumName: track.album.name, points: 360, corner: 12)
-                        .frame(width: side, height: side)
-                        .shadow(radius: 12)
-                        .contentShape(Rectangle())
-                        .onTapGesture { onOpenAlbum(track.album) }
-                    VStack(spacing: 4) {
-                        Text(track.song.name).font(.title2.bold()).multilineTextAlignment(.center).lineLimit(2)
-                            .contentShape(Rectangle())
-                            .onTapGesture { onOpenAlbum(track.album) }
-                        Text(track.artistName).font(.title3).foregroundStyle(.secondary)
-                            .contentShape(Rectangle())
-                            .onTapGesture { onOpenArtist(track.album) }
-                        Text(track.album.name).font(.callout).foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .contentShape(Rectangle())
-                            .onTapGesture { onOpenAlbum(track.album) }
-                        // Currently-playing audio format + bitrate (local playback only).
-                        if remote == nil, !audio.currentFormat.isEmpty {
-                            Text(audio.currentFormat)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .padding(.top, 1)
-                        }
-                        // Stereo pair / single-channel indicator.
-                        if remote == nil, audio.channelMode != .normal {
-                            Label(audio.stereoPaired
-                                  ? "Stereo pair · \(audio.channelMode == .left ? "Left" : "Right")"
-                                  : audio.channelMode.label,
-                                  systemImage: "hifispeaker.2")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+                .indexViewStyle(.page(backgroundDisplayMode: .always))   // dots readable on light backgrounds
+            } else {
+                Spacer()
+                EmptyStateView("Nothing Playing", systemImage: "music.note")
+                Spacer()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if targetEnvironment(macCatalyst)
+        .frame(minWidth: 380, idealWidth: isPhone ? 380 : 460,
+               minHeight: 560, idealHeight: isPhone ? 600 : 680)
+        #else
+        // No minimum height on iPhone/iPad: a landscape iPhone is only ~400 pt tall, and the
+        // old 560 pt minimum pushed the controls off the screen.
+        .frame(idealWidth: isPhone ? 380 : 460, idealHeight: isPhone ? 600 : 680)
+        #endif
+    }
+
+    /// Page 1: the player. Portrait = cover above the controls; landscape (wider than tall) =
+    /// cover on the left, title + controls on the right.
+    @ViewBuilder private func playerPage(_ track: PlayableTrack) -> some View {
+        GeometryReader { geo in
+            let landscape = geo.size.width > geo.size.height
+            if landscape {
+                let side = max(100, min(geo.size.height - 56, geo.size.width * 0.42))
+                HStack(spacing: 28) {
+                    cover(track, side: side)
+                    VStack(spacing: 12) {
+                        trackText(track)
+                        progressBar(track: track)
+                        controls
                     }
+                    .frame(maxWidth: 440)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 36)          // room for the page dots
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Size the artwork to the available height so the controls always fit.
+                let side = max(120, min(geo.size.width - 64, geo.size.height * 0.46))
+                VStack(spacing: 16) {
+                    Spacer(minLength: 0)
+                    cover(track, side: side)
+                    trackText(track)
                     progressBar(track: track)
                     controls
                     Spacer(minLength: 0)
-                } else {
-                    Spacer()
-                    EmptyStateView("Nothing Playing", systemImage: "music.note")
-                    Spacer()
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, 32)
-            .padding(.bottom, isPhone ? 28 : 24)
-            .overlay(alignment: .topTrailing) {
-                Button { dismiss() } label: {
-                    Image(systemName: "chevron.down.circle.fill")
-                        .font(.title2)
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(.secondary)
-                        .padding(12)
-                }
-                .buttonStyle(.plain)
-                .help("Hide player")
-            }
-            .overlay(alignment: .topLeading) {
-                // "Current playlist" — the queue we're playing; tap a row to jump to it.
-                // Local playback only (a controlled peer has its own queue).
-                if remote == nil, !audio.queue.isEmpty {
-                    Button { showQueue = true } label: {
-                        Image(systemName: "list.bullet")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                            .padding(12)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Current playlist")
-                }
+                .padding(.horizontal, 32)
+                .padding(.bottom, 40)          // room for the page dots
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 380, idealWidth: isPhone ? 380 : 460,
-               minHeight: 560, idealHeight: isPhone ? 600 : 680)
-        .sheet(isPresented: $showQueue) { QueueView() }
+    }
+
+    private func cover(_ track: PlayableTrack, side: CGFloat) -> some View {
+        CoverImage(artistName: track.artistName, albumName: track.album.name, points: 360, corner: 12)
+            .frame(width: side, height: side)
+            .shadow(radius: 12)
+            .contentShape(Rectangle())
+            .onTapGesture { onOpenAlbum(track.album) }
+    }
+
+    private func trackText(_ track: PlayableTrack) -> some View {
+        VStack(spacing: 4) {
+            Text(track.song.name).font(.title2.bold()).multilineTextAlignment(.center).lineLimit(2)
+                .contentShape(Rectangle())
+                .onTapGesture { onOpenAlbum(track.album) }
+            Text(track.artistName).font(.title3).foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+                .onTapGesture { onOpenArtist(track.album) }
+            Text(track.album.name).font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .contentShape(Rectangle())
+                .onTapGesture { onOpenAlbum(track.album) }
+            // Currently-playing audio format + bitrate (local playback only).
+            if remote == nil, !audio.currentFormat.isEmpty {
+                Text(audio.currentFormat)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 1)
+            }
+            // Stereo pair / single-channel indicator.
+            if remote == nil, audio.channelMode != .normal {
+                Label(audio.stereoPaired
+                      ? "Stereo pair · \(audio.channelMode == .left ? "Left" : "Right")"
+                      : audio.channelMode.label,
+                      systemImage: "hifispeaker.2")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Page 3: about the artist (photo, name, location, full bio).
+    @ViewBuilder private func artistPage(_ track: PlayableTrack) -> some View {
+        let artist = model.catalog?.artist(id: track.album.artistId)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 16) {
+                    if let artist {
+                        ArtistPhoto(artist: artist, points: 96)
+                            .frame(width: 96, height: 96).clipShape(Circle())
+                            .overlay(Circle().stroke(Color.artworkBorder, lineWidth: artworkBorderWidth))
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Artist").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                        Text(track.artistName).font(.title2.bold())
+                        if let loc = artist?.locationText {
+                            Label(loc, systemImage: "location.fill")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Button("Open artist page") { onOpenArtist(track.album) }
+                            .font(.callout)
+                    }
+                    Spacer(minLength: 0)
+                }
+                if let bio = artist?.bio ?? artist?.description, !bio.isEmpty {
+                    Text(bio).font(.body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 44)
+            .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Page 4: about the album (cover, name, artist, release date, full description).
+    @ViewBuilder private func albumPage(_ track: PlayableTrack) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 16) {
+                    CoverImage(artistName: track.artistName, albumName: track.album.name, points: 120, corner: 8)
+                        .frame(width: 96, height: 96)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Album").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                        Text(track.album.name).font(.title2.bold())
+                        Text(track.artistName).font(.subheadline).foregroundStyle(.secondary)
+                        if let d = track.album.releaseDateValue {
+                            Text(d.formatted(date: .abbreviated, time: .omitted))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Button("Open album page") { onOpenAlbum(track.album) }
+                            .font(.callout)
+                    }
+                    Spacer(minLength: 0)
+                }
+                if let desc = track.album.description, !desc.isEmpty {
+                    Text(desc).font(.body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 44)
+            .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
     }
 
     @ViewBuilder private func remoteBanner(_ peer: Peer) -> some View {
@@ -470,7 +570,7 @@ struct NowPlayingView: View {
                 let dur = Double(track.song.duration ?? 0)
                 let pos = remoteDisplayPosition(remote, duration: dur)
                 VStack(spacing: 4) {
-                    SeekBar(current: pos, duration: dur) { _ in }.disabled(true)
+                    SeekBar(current: pos, duration: dur, touchHeight: 44) { _ in }.disabled(true)
                     HStack {
                         Text(timeText(pos)).font(.caption.monospacedDigit())
                         Spacer()
@@ -480,7 +580,7 @@ struct NowPlayingView: View {
             }
         } else {
             VStack(spacing: 4) {
-                SeekBar(current: audio.currentTime, duration: audio.duration) { audio.seek(to: $0) }
+                SeekBar(current: audio.currentTime, duration: audio.duration, touchHeight: 44) { audio.seek(to: $0) }
                 HStack {
                     Text(timeText(audio.currentTime)).font(.caption.monospacedDigit())
                     Spacer()
@@ -531,22 +631,32 @@ struct NowPlayingView: View {
 /// through, with the current one highlighted; tap a row to jump straight to it.
 struct QueueView: View {
     @EnvironmentObject var audio: AudioPlayer
+    @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    /// Shown as a page of the Now Playing sheet: no Done button, and tapping a row plays it
+    /// without closing the player.
+    var inPlayer = false
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Current Playlist").font(.headline)
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                if !inPlayer { Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
             }
             .padding(.horizontal).padding(.vertical, 12)
             Divider()
+            if model.remoteFocus != nil || audio.queue.isEmpty {
+                Spacer()
+                Text(model.remoteFocus != nil ? "The playlist is on the other device." : "Nothing queued.")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else {
             List {
                 ForEach(Array(audio.queue.enumerated()), id: \.element.id) { idx, t in
                     Button {
                         audio.jump(to: idx)
-                        dismiss()
+                        if !inPlayer { dismiss() }
                     } label: {
                         HStack(spacing: 12) {
                             if idx == audio.index {
@@ -568,6 +678,8 @@ struct QueueView: View {
                     }
                     .buttonStyle(.plain)
                 }
+            }
+            .padding(.bottom, inPlayer ? 30 : 0)   // clear of the page dots
             }
         }
     }

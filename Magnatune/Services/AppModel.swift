@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
     /// Whether the device currently has a usable network path. When false the UI
     /// hides everything that hasn't been downloaded and greys the browse sections.
     @Published private(set) var isOnline = true
+    private var coverPrefetcher: ImagePrefetcher?
 
     // MARK: Downloaded-content sets (drive offline filtering)
     @Published private(set) var downloadedSongIDs: Set<Int64> = []
@@ -668,6 +669,26 @@ final class AppModel: ObservableObject {
             DownloadStore.shared.enqueue(songID: song.id, remote: url, authHeader: auth)
         }
         downloads.setPausedOffline(!isOnline && downloads.pendingCount > 0)
+        prefetchCovers(forSongs: targets, using: c)
+    }
+
+    /// Save the covers of every album with downloaded songs, so offline mode has artwork.
+    /// Two sizes: 150 (rows, mini-player) and 600 (grids, album page, Now Playing); CoverImage
+    /// falls back to whichever is cached. Kingfisher skips covers already on disk.
+    private func prefetchCovers(forSongs songs: [Song], using c: CatalogStore) {
+        guard isOnline else { return }
+        var seen = Set<Int64>(), urls: [URL] = []
+        for song in songs where seen.insert(song.albumId).inserted {
+            guard let album = c.album(id: song.albumId), let artist = c.artist(id: album.artistId) else { continue }
+            for size in [150, 600] {
+                if let u = URLBuilder.coverURL(artistName: artist.name, albumName: album.name, size: size) { urls.append(u) }
+            }
+        }
+        guard !urls.isEmpty else { return }
+        coverPrefetcher?.stop()
+        coverPrefetcher = ImagePrefetcher(urls: urls)
+        coverPrefetcher?.maxConcurrentDownloads = 4
+        coverPrefetcher?.start()
     }
 
     /// Route background-session events into the published download state.

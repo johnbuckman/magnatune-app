@@ -70,7 +70,7 @@ struct ArtistDetailView: View {
                 Divider()
                 Text("Albums").font(.title2.bold())
                 LazyVGrid(columns: cols, spacing: 16) {
-                    ForEach(model.visibleAlbums(albums)) { album in
+                    ForEach(Self.vocalsRemovedAfterOriginals(model.visibleAlbums(albums))) { album in
                         AlbumCell(album: album, artistName: artist.name)
                     }
                 }
@@ -105,6 +105,23 @@ struct ArtistDetailView: View {
         }
         .task { load() }
         .onChange(of: model.catalogGeneration) { _ in load() }
+    }
+
+    /// Each "(vocals removed)" album (sku `<original sku>nv`, name ending "(vocals removed)")
+    /// is listed straight after its original (John, 2026-11-23; same rule as the web player).
+    /// One whose original isn't in the list (e.g. hidden) keeps its own place.
+    static func vocalsRemovedAfterOriginals(_ list: [Album]) -> [Album] {
+        func isNv(_ a: Album) -> Bool {
+            a.sku.hasSuffix("nv") && a.name.lowercased().hasSuffix("(vocals removed)")
+        }
+        let bySku = Dictionary(list.map { ($0.sku, $0) }, uniquingKeysWith: { a, _ in a })
+        var out: [Album] = []
+        for a in list {
+            if isNv(a), bySku[String(a.sku.dropLast(2))] != nil { continue }   // placed after its original
+            out.append(a)
+            if let nv = bySku[a.sku + "nv"], isNv(nv) { out.append(nv) }
+        }
+        return out
     }
 
     private func load() {

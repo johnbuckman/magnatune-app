@@ -57,10 +57,33 @@ struct CoverImage: View {
         return CoverImage.tiers.first { CGFloat($0) >= needed } ?? CoverImage.tiers.last!
     }
 
+    /// Covers are cached per size (each tier is its own URL), so offline a screen asking for
+    /// a size that was never viewed found nothing and showed the blank placeholder (John,
+    /// 2026-11-23: "on offline mode many albums have no artwork"). When the ideal size isn't
+    /// cached, any other cached size of the same cover is shown instead, nearest larger first.
+    private var cachedAlternative: URL? {
+        let ideal = pixelSize
+        guard let want = URLBuilder.coverURL(artistName: artistName, albumName: albumName, size: ideal),
+              !ImageCache.default.imageCachedType(forKey: want.cacheKey).cached else { return nil }
+        let order = CoverImage.tiers.filter { $0 > ideal } + CoverImage.tiers.filter { $0 < ideal }.reversed()
+        for sz in order {
+            if let u = URLBuilder.coverURL(artistName: artistName, albumName: albumName, size: sz),
+               ImageCache.default.imageCachedType(forKey: u.cacheKey).cached { return u }
+        }
+        return nil
+    }
+
     var body: some View {
+        let alt = cachedAlternative
         KFImage(URLBuilder.coverURL(artistName: artistName, albumName: albumName, size: pixelSize))
             .resizable()
-            .placeholder { placeholder }
+            .placeholder {
+                if let alt {
+                    KFImage(alt).onlyFromCache().resizable().aspectRatio(1, contentMode: .fill)
+                } else {
+                    placeholder
+                }
+            }
             .fade(duration: 0.2)
             .aspectRatio(1, contentMode: .fill)
             .clipShape(RoundedRectangle(cornerRadius: corner))

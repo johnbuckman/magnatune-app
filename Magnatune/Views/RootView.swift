@@ -56,6 +56,7 @@ struct RootView: View {
     @State private var sidebarHeight: CGFloat = 800          // measured column height
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var isCompact = false                     // mirrors layout mode for sheets
+    @State private var phoneLandscape = false                // iPhone held sideways: one top bar, no bottom bar
 
     private static let kSection = "nav.section"
 
@@ -86,8 +87,9 @@ struct RootView: View {
             }
             .environment(\.isPhoneLayout, compact)
             .frame(width: geo.size.width, height: geo.size.height)
-            .onAppear { isCompact = compact }
+            .onAppear { isCompact = compact; phoneLandscape = Self.isPhoneLandscape(geo.size) }
             .onChange(of: compact) { v in isCompact = v }
+            .onChange(of: geo.size) { sz in phoneLandscape = Self.isPhoneLandscape(sz) }
         }
         .statusBarHidden(true)
         .hideSystemOverlays()
@@ -188,12 +190,18 @@ struct RootView: View {
 
     // MARK: Compact layout (iPhone) — content + docked player + bottom tab bar
 
+    /// iPhone held sideways (the screen is wider than tall). John, 2026-11-23: in landscape
+    /// every tab goes on the top bar and there is no bottom bar, so the content gets the height.
+    static func isPhoneLandscape(_ size: CGSize) -> Bool {
+        UIDevice.current.userInterfaceIdiom == .phone && size.width > size.height
+    }
+
     private var compactLayout: some View {
         VStack(spacing: 0) {
             topBar
             mainNavStack.frame(maxWidth: .infinity, maxHeight: .infinity)
             MiniPlayer(onExpand: { showNowPlaying = true })
-            tabBar
+            if !phoneLandscape { tabBar }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
@@ -205,9 +213,14 @@ struct RootView: View {
 
     private var topBar: some View {
         HStack(spacing: 0) {
-            ForEach(topBarItems) { compactBarButton($0) }
+            ForEach(phoneLandscape ? topBarItems + compactTabs : topBarItems) { compactBarButton($0) }
         }
-        .background(Color(.systemGray6).ignoresSafeArea(edges: .top))
+        // Landscape: use the full width of the display (John: "don't stop where the screen
+        // curves"). The bar ignores the side safe areas; the 16 pt keeps the outer icons clear
+        // of the rounded corners (the camera cutout is mid-height, below the bar).
+        .padding(.horizontal, phoneLandscape ? 16 : 0)
+        .ignoresSafeArea(.container, edges: phoneLandscape ? .horizontal : [])
+        .background(Color(.systemGray6).ignoresSafeArea(edges: phoneLandscape ? [.top, .horizontal] : .top))
         .overlay(alignment: .bottom) { Divider() }
     }
 
