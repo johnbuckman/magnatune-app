@@ -276,7 +276,7 @@ struct AlbumDetailView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(shown.isEmpty)
             FavoriteButton(kind: "album", id: album.id)
-            AlbumDownloadButton(sku: album.sku)
+            AlbumDownloadButton(sku: album.sku, songIDs: tracks.map { $0.song.id })   // all songs, not just the offline-visible ones
             AlbumBuyButton(sku: album.sku, compact: isPhone)
             AddToPlaylistButton { shown.map { $0.song.id } }
         }

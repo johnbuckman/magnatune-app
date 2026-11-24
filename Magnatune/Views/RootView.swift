@@ -57,6 +57,7 @@ struct RootView: View {
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var isCompact = false                     // mirrors layout mode for sheets
     @State private var phoneLandscape = false                // iPhone held sideways: one top bar, no bottom bar
+    @State private var hasIsland = false                     // iPhone with a Dynamic Island, held upright
 
     private static let kSection = "nav.section"
 
@@ -87,9 +88,15 @@ struct RootView: View {
             }
             .environment(\.isPhoneLayout, compact)
             .frame(width: geo.size.width, height: geo.size.height)
-            .onAppear { isCompact = compact; phoneLandscape = Self.isPhoneLandscape(geo.size) }
+            .onAppear {
+                isCompact = compact; phoneLandscape = Self.isPhoneLandscape(geo.size)
+                hasIsland = Self.hasDynamicIsland(geo)
+            }
             .onChange(of: compact) { v in isCompact = v }
-            .onChange(of: geo.size) { sz in phoneLandscape = Self.isPhoneLandscape(sz) }
+            .onChange(of: geo.size) { sz in
+                phoneLandscape = Self.isPhoneLandscape(sz)
+                hasIsland = Self.hasDynamicIsland(geo)
+            }
         }
         .statusBarHidden(true)
         .hideSystemOverlays()
@@ -196,6 +203,15 @@ struct RootView: View {
         UIDevice.current.userInterfaceIdiom == .phone && size.width > size.height
     }
 
+    /// iPhone with a Dynamic Island, held upright. The island's phones have a top safe area
+    /// of 54 pt or more; notched phones are at most 50 (the status bar is hidden, but the
+    /// inset stays).
+    static func hasDynamicIsland(_ geo: GeometryProxy) -> Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
+            && geo.size.height > geo.size.width
+            && geo.safeAreaInsets.top >= 51
+    }
+
     private var compactLayout: some View {
         VStack(spacing: 0) {
             topBar
@@ -205,10 +221,34 @@ struct RootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
+        .overlay(alignment: .top) { if hasIsland { islandBar } }
+    }
+
+    /// Dynamic Island phones: Popular and Search sit in the otherwise empty strip either side
+    /// of the island, leaving the top bar four wider buttons. John, 2026-11-23 (to-do
+    /// 10537243790). The island is about 126 x 37 pt, 11 pt from the top, centred.
+    private var islandBar: some View {
+        GeometryReader { g in
+            let top = g.safeAreaInsets.top
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                compactBarButton(.popular).frame(width: 76)
+                Color.clear.frame(width: 136)          // the island + a little air
+                compactBarButton(.search).frame(width: 76)
+                Spacer(minLength: 0)
+            }
+            .frame(height: top)
+            .offset(y: -top)                            // up into the safe area
+        }
+        .frame(height: 0)
     }
 
     // iPhone: browse-by categories in the top bar; library/search/settings in the bottom bar.
-    private var topBarItems: [SidebarItem] { [.popular, .artists, .albums, .songs, .genres, .search] }
+    // With a Dynamic Island, Popular and Search move up beside the island (islandBar).
+    private var topBarItems: [SidebarItem] {
+        hasIsland ? [.artists, .albums, .songs, .genres]
+                  : [.popular, .artists, .albums, .songs, .genres, .search]
+    }
     private var compactTabs: [SidebarItem] { [.favorites, .myPlaylists, .tags, .playlists, .settings] }
 
     private var topBar: some View {

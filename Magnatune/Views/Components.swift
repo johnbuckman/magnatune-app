@@ -394,11 +394,19 @@ private struct AddToPlaylistPresenter: ViewModifier {
 /// format chosen in Settings. Renders nothing for non-members.
 struct AlbumDownloadButton: View {
     @EnvironmentObject var credentials: Credentials
+    @EnvironmentObject var model: AppModel
     @Environment(\.openURL) private var openURL
     let sku: String
+    /// The album's songs, so offline mode can show whether it's all downloaded.
+    var songIDs: [Int64] = []
     @AppStorage("download.album.format") private var format = "vbr"
     var body: some View {
-        if credentials.isMember, !sku.isEmpty {
+        if !model.isOnline {
+            // Offline the website download can't work: show a check when every song is here.
+            if !songIDs.isEmpty, songIDs.allSatisfy(model.downloadedSongIDs.contains) {
+                DownloadedMark(size: 20).help("Whole album downloaded — plays offline")
+            }
+        } else if credentials.isMember, !sku.isEmpty {
             Button {
                 if let url = URLBuilder.albumMembershipDownloadURL(sku: sku, format: format) { openURL(url) }
             } label: {
@@ -439,11 +447,17 @@ struct AlbumBuyButton: View {
 
 struct SongDownloadButton: View {
     @EnvironmentObject var credentials: Credentials
+    @EnvironmentObject var model: AppModel
     @Environment(\.openURL) private var openURL
     let track: PlayableTrack
     @AppStorage("download.song.format") private var format = "mp3"
     var body: some View {
-        if credentials.isMember {
+        if !model.isOnline {
+            // Offline: a check for a downloaded song instead of the website download button.
+            if model.downloadedSongIDs.contains(track.song.id) {
+                DownloadedMark(size: 17).help("Downloaded — plays offline")
+            }
+        } else if credentials.isMember {
             Button {
                 if let url = URLBuilder.songDownloadURL(artistName: track.artistName, albumName: track.album.name, song: track.song, ext: format) { openURL(url) }
             } label: {
@@ -649,6 +663,18 @@ struct SongRow: View {
     }
 }
 
+/// "Fully downloaded" check shown in place of the download buttons while offline.
+struct DownloadedMark: View {
+    var size: CGFloat
+    var body: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .resizable().scaledToFit()
+            .foregroundStyle(Color.accentColor)
+            .frame(width: size, height: size)
+            .accessibilityLabel("Downloaded")
+    }
+}
+
 /// Offline-download status of one favorited song: ✓ downloaded, spinner while downloading,
 /// clock while queued, warning when it failed (tap to retry). Renders nothing for songs the
 /// favorites don't keep.
@@ -658,6 +684,8 @@ struct DownloadStatusIcon: View {
     let songID: Int64
     var body: some View {
         switch downloads.state(of: songID) {
+        case .downloaded where !model.isOnline:
+            EmptyView()   // offline, SongDownloadButton shows the check instead
         case .downloaded:
             Image(systemName: "arrow.down.circle.fill")
                 .foregroundStyle(Color.secondary).font(.footnote)
@@ -699,10 +727,13 @@ struct DownloadSummaryLabel: View {
 }
 
 /// Slim strip shown above the content while the device is offline.
+/// Hidden while music is playing (John, 2026-11-23): the player already shows what's on.
 struct OfflineBanner: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var audio: AudioPlayer
     var body: some View {
         let n = model.downloadedSongIDs.count
+        if !audio.isPlaying {
         Label(n == 0 ? "Offline — nothing downloaded yet"
                      : "Offline — showing your \(n) downloaded song\(n == 1 ? "" : "s")",
               systemImage: "wifi.slash")
@@ -711,6 +742,7 @@ struct OfflineBanner: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
             .background(Color(.systemGray5))
+        }
     }
 }
 

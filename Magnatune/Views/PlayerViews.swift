@@ -123,10 +123,10 @@ struct MiniPlayer: View {
     @EnvironmentObject var audio: AudioPlayer
     @EnvironmentObject var model: AppModel
     @Environment(\.isPhoneLayout) private var isPhone
-    @State private var showVolumePopover = false
+    @State private var showPlayModes = false
     @State private var width: CGFloat = 1000
     var onExpand: () -> Void
-    /// Phone-style controls (volume button, icon-only AirPlay, narrow transport buttons) on a
+    /// Phone-style controls (icon-only AirPlay, narrow transport buttons) on a
     /// phone, or wherever the player is too narrow for the full set to fit on one line.
     private var compactControls: Bool { isPhone || width < 700 }
 
@@ -154,25 +154,21 @@ struct MiniPlayer: View {
                 HStack(spacing: 12) {
                     artwork(displayTrack)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(displayTrack?.song.name ?? "Not Playing")
-                            .font(.callout).lineLimit(1)
+                        MarqueeText(text: displayTrack?.song.name ?? "Not Playing", font: .callout)
                             .foregroundStyle(hasTrack ? .primary : .secondary)
-                        Text(displayTrack?.artistName ?? "Magnatune")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        MarqueeText(text: displayTrack?.artistName ?? "Magnatune", font: .caption)
+                            .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { if hasTrack { onExpand() } }
 
-                if !compactControls && remote == nil { volumeControl }
-                if compactControls && remote == nil { volumeButton }
                 if remote == nil { airplayPill }
-                // Repeat + shuffle toggles, left of the transport — matches the web player.
-                if remote == nil {
-                    transportToggle("repeat", on: audio.repeatEnabled) { audio.repeatEnabled.toggle() }
-                    transportToggle("shuffle", on: audio.shuffleEnabled) { audio.shuffleEnabled.toggle() }
-                }
+                // One play-mode button, left of the transport: opens a small popup with
+                // Shuffle, Repeat and volume. (John, 2026-11-23: no volume control or
+                // shuffle button on the player itself.)
+                if remote == nil { playModeButton }
                 transportButton("backward.fill") { transport(.prev) }.disabled(!hasTrack)
                 transportButton(playPauseIcon) { transport(.playPause) }.disabled(!hasTrack)
                 transportButton("forward.fill") { transport(.next) }.disabled(!hasTrack)
@@ -253,44 +249,22 @@ struct MiniPlayer: View {
         }
     }
 
-    /// Output-volume slider — shown only on large screens (iPad/Mac), left of AirPlay.
-    @ViewBuilder private var volumeControl: some View {
-        HStack(spacing: 6) {
-            Image(systemName: volumeIcon)
-                .font(.caption).foregroundStyle(.secondary)
-                .frame(width: 16)
-            Slider(value: $audio.volume, in: 0...1)
-                .frame(width: 84)
+    /// Repeat-icon button that opens the play-mode popup. Filled when shuffle or repeat is on.
+    private var playModeButton: some View {
+        let on = audio.shuffleEnabled || audio.repeatEnabled
+        return Button { showPlayModes = true } label: {
+            Image(systemName: playModeIcon(audio))
+                .font(.subheadline)
+                .frame(width: compactControls ? 26 : 52, height: 28)
+                .foregroundStyle(on ? Color.white : Color.accentColor)
+                .background(RoundedRectangle(cornerRadius: 7).fill(on ? Color.accentColor : .clear))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.accentColor, lineWidth: 1))
+                .contentShape(Rectangle())
         }
-    }
-
-    private var volumeIcon: String {
-        switch audio.volume {
-        case ..<0.01: return "speaker.slash.fill"
-        case ..<0.5:  return "speaker.wave.1.fill"
-        default:      return "speaker.wave.2.fill"
-        }
-    }
-
-    /// iPhone: a volume icon that opens a horizontal slider popover. (A rotated vertical Slider
-    /// tracks drags incorrectly — the gesture space doesn't follow the rotation — so use a plain
-    /// horizontal Slider, same as the iPad control.)
-    @ViewBuilder private var volumeButton: some View {
-        Button { showVolumePopover = true } label: {
-            Image(systemName: volumeIcon)
-                .font(.subheadline).foregroundStyle(.secondary)
-                .frame(width: 30, height: 28).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showVolumePopover) {
-            HStack(spacing: 8) {
-                Image(systemName: "speaker.fill").font(.caption2).foregroundStyle(.secondary)
-                Slider(value: $audio.volume, in: 0...1).frame(width: 150)
-                Image(systemName: "speaker.wave.2.fill").font(.caption2).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .keepPopoverCompat()
-        }
+        .buttonStyle(.borderless)
+        .help("Shuffle, repeat and volume")
+        .accessibilityLabel("Shuffle, repeat and volume")
+        .popover(isPresented: $showPlayModes) { PlayModePopup().environmentObject(audio).keepPopoverCompat() }
     }
 
     @ViewBuilder private var airplayPill: some View {
@@ -330,21 +304,6 @@ struct MiniPlayer: View {
         .buttonStyle(.borderless)
     }
 
-    /// A bordered ON/OFF transport toggle (shuffle / repeat) — fills accent when on, like the
-    /// web player's shuffle button.
-    private func transportToggle(_ system: String, on: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: system)
-                .font(.subheadline)
-                .frame(width: isPhone ? 26 : 52, height: 28)
-                .foregroundStyle(on ? Color.white : Color.accentColor)
-                .background(RoundedRectangle(cornerRadius: 7).fill(on ? Color.accentColor : .clear))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.accentColor, lineWidth: 1))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
-    }
-
     private func timeText(_ t: Double) -> String {
         guard t.isFinite, t >= 0 else { return "0:00" }
         let s = Int(t)
@@ -365,6 +324,7 @@ struct NowPlayingView: View {
     /// John, 2026-11-23 (to-do 10537188683): replaces the queue (top-left) and close
     /// (top-right) icons; the grab handle and swipe-down still hide the sheet.
     @State private var page = 0
+    @State private var showPlayModes = false
 
     private var remote: Peer? { model.remoteFocus }
     private var displayTrack: PlayableTrack? {
@@ -457,10 +417,11 @@ struct NowPlayingView: View {
 
     private func trackText(_ track: PlayableTrack) -> some View {
         VStack(spacing: 4) {
-            Text(track.song.name).font(.title2.bold()).multilineTextAlignment(.center).lineLimit(2)
+            MarqueeText(text: track.song.name, font: .title2.bold(), alignment: .center)
                 .contentShape(Rectangle())
                 .onTapGesture { onOpenAlbum(track.album) }
-            Text(track.artistName).font(.title3).foregroundStyle(.secondary)
+            MarqueeText(text: track.artistName, font: .title3, alignment: .center)
+                .foregroundStyle(.secondary)
                 .contentShape(Rectangle())
                 .onTapGesture { onOpenArtist(track.album) }
             Text(track.album.name).font(.callout).foregroundStyle(.secondary)
@@ -604,18 +565,22 @@ struct NowPlayingView: View {
 
     private var controls: some View {
         HStack(spacing: isPhone ? 28 : 36) {
-            Button { audio.shuffleEnabled.toggle() } label: { Image(systemName: "shuffle").font(.title3) }
-                .foregroundStyle(audio.shuffleEnabled ? Color.accentColor : .secondary)
-                .disabled(remote != nil)
+            // Empty slot the size of the play-mode button, so play/pause stays centred.
+            Color.clear.frame(width: 28, height: 28)
             Button { transport(.prev) } label: { Image(systemName: "backward.fill").font(.title) }
             Button { transport(.playPause) } label: {
                 let playing = remote != nil ? isRemotePlaying : audio.isPlaying
                 Image(systemName: playing ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 64))
             }
             Button { transport(.next) } label: { Image(systemName: "forward.fill").font(.title) }
-            Button { audio.repeatEnabled.toggle() } label: { Image(systemName: "repeat").font(.title3) }
-                .foregroundStyle(audio.repeatEnabled ? Color.accentColor : .secondary)
-                .disabled(remote != nil)
+            // Shuffle, repeat and volume live in one popup (John, 2026-11-23).
+            Button { showPlayModes = true } label: {
+                Image(systemName: playModeIcon(audio)).font(.title3).frame(width: 28, height: 28)
+            }
+            .foregroundStyle(audio.shuffleEnabled || audio.repeatEnabled ? Color.accentColor : .secondary)
+            .disabled(remote != nil)
+            .accessibilityLabel("Shuffle, repeat and volume")
+            .popover(isPresented: $showPlayModes) { PlayModePopup().environmentObject(audio).keepPopoverCompat() }
         }
         .buttonStyle(.plain)
     }
@@ -682,5 +647,33 @@ struct QueueView: View {
             .padding(.bottom, inPlayer ? 30 : 0)   // clear of the page dots
             }
         }
+    }
+}
+
+/// Icon for the play-mode button: shuffle when only shuffle is on, otherwise repeat.
+@MainActor func playModeIcon(_ audio: AudioPlayer) -> String {
+    audio.shuffleEnabled && !audio.repeatEnabled ? "shuffle" : "repeat"
+}
+
+/// Small popup behind the player's play-mode button: Shuffle and Repeat switches and the
+/// volume slider. John, 2026-11-23 (to-do 10537243790): replaces the separate shuffle
+/// button and the volume control on the player.
+struct PlayModePopup: View {
+    @EnvironmentObject var audio: AudioPlayer
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Toggle(isOn: $audio.shuffleEnabled) { Label("Shuffle", systemImage: "shuffle") }
+            Toggle(isOn: $audio.repeatEnabled) { Label("Repeat", systemImage: "repeat") }
+            HStack(spacing: 8) {
+                Image(systemName: "speaker.fill").font(.caption).foregroundStyle(.secondary)
+                Slider(value: $audio.volume, in: 0...1)
+                Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Volume")
+        }
+        .tint(.accentColor)
+        .padding(16)
+        .frame(width: 240)
     }
 }
